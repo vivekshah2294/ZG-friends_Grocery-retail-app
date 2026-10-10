@@ -320,4 +320,4 @@ else:
         st.write(f"👤 **{st.session_state.user_name}**")
         
         if st.session_state.user_role == "Customer":
-            user_balance = pd.read_sql("SELECT balance FROM Users WHERE email=?", conn, params=(st.session_state.user_email,
+            user_balance = pd.read_sql("SELECT balance FROM Users WHERE email=?", conn, params=(st.session_state.user_email,)).iloc[0,0]
