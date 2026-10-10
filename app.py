@@ -118,7 +118,7 @@ def get_db_connection():
             ("Blended Masalas", "Chaat Masala (MDH Chunky Chat)", "100 g", 2.49, 1.90),
             ("Fresh & Perishables", "Fresh Green Chilli", "500 g", 4.99, 4.75),
             ("Fresh & Perishables", "Fresh Curry Leaves", "50 g", 1.89, 1.55),
-            ("Fresh & Perishables", "Fresh Idli/Dosa Batter", "1 kg", 5.19, 4.45),
+            ("Fresh & Perishables", "Fresh Idli/Dosa Batter", "1 kg", 5.19, 5.99),
             ("Fresh & Perishables", "Paneer Block", "1 kg", 13.38, 11.50),
             ("Pantry & Specialty", "Ghee (GRB / Khanum / TRS / Amul)", "1 L / 1 kg", 22.89, 20.50),
             ("Pantry & Specialty", "Cashew Nuts Broken (Kaju Tukda)", "500 g", 8.49, 6.90),
