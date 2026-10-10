@@ -83,12 +83,49 @@ def get_db_connection():
     
     # Seed Catalog if empty
     if pd.read_sql("SELECT COUNT(*) FROM Catalog", conn).iloc[0,0] == 0:
-        dummy_catalog = [
-            ("Dals & Legumes", "Toor Dal (KRG / Kamal)", "1 kg", 4.19, 3.30),
-            ("Whole Spices", "Jeera Whole (KRG)", "400 g", 5.19, 4.20),
-            ("Flours & Grains", "Aashirwaad Atta", "10 kg", 16.49, 15.65)
+        full_catalog = [
+            ("Flours & Grains", "Aashirwaad Atta", "10 kg", 15.79, 14.50),
+            ("Flours & Grains", "Basmati Rice (Premium / India Gate)", "5 kg", 17.49, 15.25),
+            ("Flours & Grains", "Sona Masoori Rice", "5 kg", 10.99, 9.20),
+            ("Flours & Grains", "Idli Rice", "5 kg", 9.99, 8.50),
+            ("Flours & Grains", "Besan (Gram Flour)", "1 kg", 3.19, 2.60),
+            ("Flours & Grains", "Sooji (Rava / Semolina)", "1 kg", 2.69, 2.25),
+            ("Dals & Legumes", "Toor Dal", "1 kg", 4.19, 3.45),
+            ("Dals & Legumes", "Moong Dal Yellow", "1 kg", 3.99, 3.30),
+            ("Dals & Legumes", "Moong Whole Green", "1 kg", 3.69, 3.05),
+            ("Dals & Legumes", "Urid Dal Whole", "1 kg", 4.29, 3.55),
+            ("Dals & Legumes", "Urid Dal Split / Chilka", "1 kg", 3.99, 3.35),
+            ("Dals & Legumes", "Chana Dal", "1 kg", 3.49, 2.85),
+            ("Dals & Legumes", "Chickpeas (Kabuli Chana)", "1 kg", 3.59, 2.95),
+            ("Dals & Legumes", "Kaala Chana (Black Chickpeas)", "1 kg", 3.29, 2.70),
+            ("Dals & Legumes", "Yellow Peas Ragda (Vatana)", "1 kg", 2.89, 2.35),
+            ("Whole Spices", "Jeera Whole (Cumin Seeds)", "400 g", 5.19, 4.25),
+            ("Whole Spices", "Mustard Seeds (Rai)", "400 g", 3.49, 2.85),
+            ("Whole Spices", "Black Pepper Whole", "100 g", 2.99, 2.35),
+            ("Whole Spices", "Cardamom Green (Elaichi)", "50 g", 6.79, 5.20),
+            ("Whole Spices", "Cloves (Laung)", "50 g", 2.59, 2.00),
+            ("Whole Spices", "Ajwain (Carom Seeds)", "100 g", 1.99, 1.55),
+            ("Whole Spices", "Hing (Asafoetida - Vandevi/LG)", "50 g", 2.49, 1.90),
+            ("Whole Spices", "Saffron (Kesar)", "1 g", 7.49, 5.75),
+            ("Spice Powders", "Turmeric Powder (Haldi)", "400 g", 3.29, 2.60),
+            ("Spice Powders", "Red Chilli Powder (Extra Hot / Kashmiri)", "400 g", 4.89, 3.80),
+            ("Spice Powders", "Coriander Powder (Dhaniya)", "400 g", 3.49, 2.70),
+            ("Spice Powders", "Jeera Powder (Cumin Powder)", "400 g", 4.99, 3.90),
+            ("Blended Masalas", "Garam Masala (MDH/Everest)", "100 g", 2.69, 2.10),
+            ("Blended Masalas", "Pav Bhaji Masala (MDH/Everest)", "100 g", 2.69, 2.10),
+            ("Blended Masalas", "Biryani Masala (Shan/MDH)", "100 g", 2.79, 2.20),
+            ("Blended Masalas", "Chhole Masala (MDH/Everest)", "100 g", 2.69, 2.10),
+            ("Blended Masalas", "Chaat Masala (MDH Chunky Chat)", "100 g", 2.49, 1.90),
+            ("Fresh & Perishables", "Fresh Green Chilli", "500 g", 4.99, 4.75),
+            ("Fresh & Perishables", "Fresh Curry Leaves", "50 g", 1.89, 1.55),
+            ("Fresh & Perishables", "Fresh Idli/Dosa Batter", "1 kg", 5.19, 4.45),
+            ("Fresh & Perishables", "Paneer Block", "1 kg", 13.38, 11.50),
+            ("Pantry & Specialty", "Ghee (GRB / Khanum / TRS / Amul)", "1 L / 1 kg", 22.89, 20.50),
+            ("Pantry & Specialty", "Cashew Nuts Broken (Kaju Tukda)", "500 g", 8.49, 6.90),
+            ("Pantry & Specialty", "Sev (Nylon / Ratlami)", "400 g", 3.79, 2.95),
+            ("Pantry & Specialty", "Chai Patti (Wagh Bakri / Red Label)", "1 kg", 13.49, 10.95)
         ]
-        conn.executemany("INSERT INTO Catalog (category, item_name, pack_size, jamoona_price, friends_price) VALUES (?, ?, ?, ?, ?)", dummy_catalog)
+        conn.executemany("INSERT INTO Catalog (category, item_name, pack_size, jamoona_price, friends_price) VALUES (?, ?, ?, ?, ?)", full_catalog)
     
     conn.commit()
     return conn
