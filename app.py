@@ -321,3 +321,26 @@ else:
         
         if st.session_state.user_role == "Customer":
             user_balance = pd.read_sql("SELECT balance FROM Users WHERE email=?", conn, params=(st.session_state.user_email,)).iloc[0,0]
+            st.write(f"💼 Open Tab: **€{user_balance:.2f}**")
+            st.divider()
+            nav = st.radio("Navigation", ["Catalog", "Cart / Checkout"])
+        else:
+            st.write("🛡️ **Admin Account**")
+            st.divider()
+            # FIX: Give the admin a full navigation menu instead of locking them to one page
+            nav = st.radio("Navigation", ["Admin Dashboard", "Catalog", "Cart / Checkout"])
+
+        if st.button("Log Out"):
+            st.session_state.logged_in = False
+            st.session_state.cart = {}
+            st.rerun()
+
+    # View Router (Must be outside the sidebar block)
+    if 'last_order' in st.session_state:
+        page_confirmation()
+    elif nav == "Catalog":
+        page_order()
+    elif nav == "Cart / Checkout":
+        page_cart()
+    elif nav == "Admin Dashboard":
+        page_admin()
