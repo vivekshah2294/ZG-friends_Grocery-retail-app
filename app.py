@@ -1,8 +1,11 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+import sqlite3
 import hashlib
 import uuid
+from datetime import datetime
+import smtplib
+from email.mime.text import MIMEText
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Zin & Gin Retail", layout="wide", initial_sidebar_state="collapsed")
@@ -25,38 +28,72 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- GOOGLE SHEETS CONNECTION ---
-# You need to publish the Google Sheet to the web as CSV for reading, 
-# or use gspread/st.connection for reading AND writing. 
-# For this script to write, it requires st.connection("gsheets", type=GSheetsConnection) 
-# and a secrets.toml file with service account credentials.
-# Here we simulate the DB connection to ensure the code runs immediately for you to test.
-
-DATABASE_ID = "1OsamZqwE5WZyZHqN3vyHqPx9Jo_40rPR3BXY5u8Wyy0"
-
+# --- LOCAL DATABASE INITIALIZATION ---
 @st.cache_resource
-def get_catalog():
-    # Public CSV read of your specific sheet ID
-    url = f"https://docs.google.com/spreadsheets/d/{DATABASE_ID}/gviz/tq?tqx=out:csv&sheet=Catalog"
-    try:
-        return pd.read_csv(url)
-    except:
-        # Fallback dummy data if the sheet isn't public yet
-        return pd.DataFrame({
-            "Category": ["Dals & Legumes", "Whole Spices"],
-            "Item Name": ["Toor Dal (KRG / Kamal)", "Jeera Whole (KRG)"],
-            "Standard Pack Size": ["1 kg", "400 g"],
-            "Jamoona Market Price (€)": [4.19, 5.19],
-            "Proposed Friends Price (€)": [3.30, 4.20]
-        })
+def get_db_connection():
+    conn = sqlite3.connect("retail_orders.db", check_same_thread=False)
+    
+    # Create Tables
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS Users (
+            email TEXT PRIMARY KEY,
+            name TEXT,
+            password_hash TEXT,
+            role TEXT,
+            balance REAL DEFAULT 0.0
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS Catalog (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            category TEXT,
+            item_name TEXT,
+            pack_size TEXT,
+            jamoona_price REAL,
+            friends_price REAL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS Orders (
+            order_id TEXT PRIMARY KEY,
+            date TEXT,
+            user_email TEXT,
+            total_amount REAL,
+            payment_method TEXT,
+            status TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS OrderLineItems (
+            line_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id TEXT,
+            item_name TEXT,
+            qty INTEGER,
+            unit_price REAL,
+            subtotal REAL,
+            FOREIGN KEY(order_id) REFERENCES Orders(order_id)
+        )
+    """)
+    
+    # Seed Admin User if not exists
+    admin_email = "zinandgin@gmail.com"
+    admin_pass = hashlib.sha256("admin123".encode()).hexdigest()
+    conn.execute("INSERT OR IGNORE INTO Users (email, name, password_hash, role) VALUES (?, ?, ?, ?)", 
+                 (admin_email, "Admin", admin_pass, "Admin"))
+    
+    # Seed Catalog if empty
+    if pd.read_sql("SELECT COUNT(*) FROM Catalog", conn).iloc[0,0] == 0:
+        dummy_catalog = [
+            ("Dals & Legumes", "Toor Dal (KRG / Kamal)", "1 kg", 4.19, 3.30),
+            ("Whole Spices", "Jeera Whole (KRG)", "400 g", 5.19, 4.20),
+            ("Flours & Grains", "Aashirwaad Atta", "10 kg", 16.49, 15.65)
+        ]
+        conn.executemany("INSERT INTO Catalog (category, item_name, pack_size, jamoona_price, friends_price) VALUES (?, ?, ?, ?, ?)", dummy_catalog)
+    
+    conn.commit()
+    return conn
 
-# --- SESSION STATE INITIALIZATION ---
-if 'logged_in' not in st.session_state:
-    st.session_state.logged_in = False
-    st.session_state.user_email = ""
-    st.session_state.user_name = ""
-if 'cart' not in st.session_state:
-    st.session_state.cart = {}
+conn = get_db_connection()
 
 # --- HELPER FUNCTIONS ---
 def hash_password(password):
@@ -71,10 +108,38 @@ def update_cart(item, price, delta):
     else:
         st.session_state.cart[item] = {"qty": new_qty, "price": price}
 
+def send_admin_email_alert(order_id, user_name, total_amount, method):
+    # Requires st.secrets to be configured with an app password
+    try:
+        if "email" in st.secrets:
+            sender = st.secrets["email"]["sender"]
+            pwd = st.secrets["email"]["password"]
+            receiver = "zinandgin@gmail.com"
+            
+            body = f"New order placed by {user_name}!\n\nOrder ID: {order_id}\nTotal: €{total_amount:.2f}\nMethod: {method}\n\nLog into the Admin portal to view details."
+            msg = MIMEText(body)
+            msg["Subject"] = f"🛒 New Retail Order: €{total_amount:.2f}"
+            msg["From"] = f"Zin & Gin Retail <{sender}>"
+            msg["To"] = receiver
+            
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+                server.login(sender, pwd)
+                server.send_message(msg)
+    except Exception as e:
+        print(f"Email failed (this is expected if secrets aren't set up yet): {e}")
+
+# --- SESSION STATE INITIALIZATION ---
+if 'logged_in' not in st.session_state:
+    st.session_state.logged_in = False
+    st.session_state.user_email = ""
+    st.session_state.user_name = ""
+    st.session_state.user_role = ""
+if 'cart' not in st.session_state:
+    st.session_state.cart = {}
+
 # --- PAGE: LOGIN / SIGNUP ---
 def page_login():
     st.title("🔐 Zin & Gin Retail Portal")
-    st.write("Welcome to the friends & family grocery portal.")
     
     tab1, tab2 = st.tabs(["Log In", "Create Account"])
     
@@ -83,14 +148,17 @@ def page_login():
             email = st.text_input("Email Address").lower()
             password = st.text_input("Password", type="password")
             if st.form_submit_button("Log In", type="primary"):
-                # In production, check against the Users_Dossier tab in Google Sheets
-                if email and password:
+                hashed_pw = hash_password(password)
+                user = pd.read_sql("SELECT * FROM Users WHERE email=? AND password_hash=?", conn, params=(email, hashed_pw))
+                
+                if not user.empty:
                     st.session_state.logged_in = True
-                    st.session_state.user_email = email
-                    st.session_state.user_name = email.split("@")[0].title()
+                    st.session_state.user_email = user.iloc[0]['email']
+                    st.session_state.user_name = user.iloc[0]['name']
+                    st.session_state.user_role = user.iloc[0]['role']
                     st.rerun()
                 else:
-                    st.error("Please enter credentials.")
+                    st.error("Invalid credentials.")
 
     with tab2:
         with st.form("signup_form"):
@@ -99,61 +167,54 @@ def page_login():
             new_password = st.text_input("Create Password", type="password")
             if st.form_submit_button("Create Account"):
                 if new_name and new_email and len(new_password) > 3:
-                    # In production, write this new user to the Users_Dossier Google Sheet tab
-                    st.success("Account created successfully! You can now log in.")
+                    try:
+                        conn.execute("INSERT INTO Users (email, name, password_hash, role) VALUES (?, ?, ?, ?)",
+                                     (new_email, new_name, hash_password(new_password), "Customer"))
+                        conn.commit()
+                        st.success("Account created successfully! You can now log in.")
+                    except sqlite3.IntegrityError:
+                        st.error("An account with this email already exists.")
                 else:
                     st.error("Please fill all fields.")
 
-# --- PAGE: ORDERING CATALOG ---
+# --- PAGE: CUSTOMER ORDERING CATALOG ---
 def page_order():
     st.title(f"👋 Hi, {st.session_state.user_name}!")
     st.write("Browse the catalog and tap to add items to your cart.")
     
-    df_catalog = get_catalog()
+    df_catalog = pd.read_sql("SELECT * FROM Catalog", conn)
     
     if df_catalog.empty:
-        st.error("Could not load catalog. Ensure the Google Sheet is published to the web.")
+        st.warning("Catalog is empty.")
         return
 
-    # Create a nice layout for categories
-    for category in df_catalog['Category'].unique():
-        if pd.isna(category): continue
-        
+    for category in df_catalog['category'].unique():
         with st.expander(f"🛒 {category}", expanded=True):
-            cat_items = df_catalog[df_catalog['Category'] == category]
+            cat_items = df_catalog[df_catalog['category'] == category]
             
-            # Print headers
             c_name, c_jamoona, c_price, c_actions = st.columns([4, 2, 2, 3])
             c_name.markdown("**Item**")
             c_jamoona.markdown("**Jamoona**")
             c_price.markdown("**Our Price**")
-            
             st.divider()
             
             for _, row in cat_items.iterrows():
-                item_name = str(row['Item Name'])
-                pack = str(row['Standard Pack Size'])
-                jamoona = row['Jamoona Market Price (€)']
-                price = row['Proposed Friends Price (€)']
+                item_name = str(row['item_name'])
+                pack = str(row['pack_size'])
+                jamoona = row['jamoona_price']
+                price = row['friends_price']
                 
-                # Retrieve current cart qty
                 current_qty = st.session_state.cart.get(item_name, {}).get("qty", 0)
                 
                 c1, c2, c3, c4 = st.columns([4, 2, 2, 3])
                 
-                # Column 1: Item Name & Pack
                 display_name = f"{item_name} ({pack})"
                 if current_qty > 0:
                      display_name += f"   🟢 **{current_qty}**"
                 c1.write(display_name)
-                
-                # Column 2: Jamoona Price (Strikethrough)
                 c2.markdown(f"<span style='color:red; text-decoration:line-through;'>€{jamoona:.2f}</span>", unsafe_allow_html=True)
-                
-                # Column 3: Our Price
                 c3.markdown(f"**€{price:.2f}**")
                 
-                # Column 4: Add/Remove Buttons
                 ac1, ac2 = c4.columns(2)
                 with ac1:
                     st.button("➖", key=f"sub_{item_name}", on_click=update_cart, args=(item_name, price, -1))
@@ -162,7 +223,7 @@ def page_order():
                 
                 st.markdown("<hr style='margin: 0.5rem 0; opacity: 0.2;'>", unsafe_allow_html=True)
 
-# --- PAGE: CART & CHECKOUT ---
+# --- PAGE: CUSTOMER CART & CHECKOUT ---
 def page_cart():
     st.title("🛍️ Order Summary")
     
@@ -178,68 +239,85 @@ def page_cart():
         price = data["price"]
         subtotal = qty * price
         total_due += subtotal
-        cart_items.append({"Item": item, "Qty": qty, "Unit Price": f"€{price:.2f}", "Subtotal": f"€{subtotal:.2f}"})
+        cart_items.append({"item_name": item, "qty": qty, "unit_price": price, "subtotal": subtotal})
         
-    df_cart = pd.DataFrame(cart_items)
-    st.dataframe(df_cart, hide_index=True, use_container_width=True)
-    
+    st.dataframe(pd.DataFrame(cart_items), hide_index=True, use_container_width=True)
     st.markdown(f"### Total Due: €{total_due:.2f}")
     
-    payment_method = st.radio("Payment Method", ["Tikkie (Request sent on WhatsApp)", "Cash on Pickup"])
+    payment_method = st.radio("Payment Method", ["Add to my Tab (Settle End of Month)", "Tikkie / Pay Now"])
     
     if st.button("✅ Place Order", type="primary", use_container_width=True):
         order_id = str(uuid.uuid4())[:8].upper()
+        order_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
-        # --- DATABASE WRITE LOGIC ---
-        # In production, use st.connection("gsheets") to append rows to:
-        # 1. Orders tab: [order_id, datetime.now(), st.session_state.user_email, "Open", total_due, payment_method]
-        # 2. Order_Line_Items tab: loops through cart to insert [order_id, item, qty, price, subtotal]
-        # 3. Users_Dossier tab: update the user's Total_Unsettled_EUR balance.
+        # Write Order
+        conn.execute("INSERT INTO Orders (order_id, date, user_email, total_amount, payment_method, status) VALUES (?, ?, ?, ?, ?, ?)",
+                     (order_id, order_date, st.session_state.user_email, total_due, payment_method, "Open"))
         
-        st.session_state.last_order = {
-            "id": order_id,
-            "total": total_due,
-            "method": payment_method
-        }
+        # Write Line Items
+        for item in cart_items:
+            conn.execute("INSERT INTO OrderLineItems (order_id, item_name, qty, unit_price, subtotal) VALUES (?, ?, ?, ?, ?)",
+                         (order_id, item["item_name"], item["qty"], item["unit_price"], item["subtotal"]))
+        
+        # Update User Balance
+        conn.execute("UPDATE Users SET balance = balance + ? WHERE email = ?", (total_due, st.session_state.user_email))
+        conn.commit()
+        
+        send_admin_email_alert(order_id, st.session_state.user_name, total_due, payment_method)
+        
+        st.session_state.last_order = {"id": order_id, "total": total_due, "method": payment_method}
         st.session_state.cart = {}
         st.rerun()
 
-# --- PAGE: CONFIRMATION INVOICE ---
 def page_confirmation():
     order = st.session_state.last_order
     st.success("🎉 Order Placed Successfully!")
-    
-    st.markdown(f"""
-    ### Invoice Summary
-    * **Order ID:** {order['id']}
-    * **Total Amount Due:** €{order['total']:.2f}
-    * **Payment Method:** {order['method']}
-    * **Status:** Open (Added to your Dossier Tab)
-    """)
-    
+    st.markdown(f"### Invoice Summary\n* **Order ID:** {order['id']}\n* **Total Amount Due:** €{order['total']:.2f}\n* **Payment Method:** {order['method']}")
     if st.button("Return to Catalog"):
         del st.session_state.last_order
         st.rerun()
+
+# --- PAGE: ADMIN DASHBOARD ---
+def page_admin():
+    st.title("🛡️ Admin Dashboard")
+    
+    tab1, tab2, tab3 = st.tabs(["Friend Dossiers (Balances)", "All Orders", "Catalog Manager"])
+    
+    with tab1:
+        st.subheader("Open Tabs & User Balances")
+        df_users = pd.read_sql("SELECT name, email, balance FROM Users WHERE role='Customer'", conn)
+        st.dataframe(df_users, hide_index=True, use_container_width=True)
+        
+        with st.expander("Settle a Balance"):
+            with st.form("settle_form"):
+                user_to_settle = st.selectbox("Select Friend", df_users['email'].tolist())
+                if st.form_submit_button("Mark Tab as Paid (Reset to €0)"):
+                    conn.execute("UPDATE Users SET balance = 0.0 WHERE email = ?", (user_to_settle,))
+                    conn.execute("UPDATE Orders SET status = 'Settled' WHERE user_email = ? AND status = 'Open'", (user_to_settle,))
+                    conn.commit()
+                    st.success("Balance settled!")
+                    st.rerun()
+                    
+    with tab2:
+        st.subheader("Order History")
+        df_orders = pd.read_sql("SELECT order_id, date, user_email, total_amount, status FROM Orders ORDER BY date DESC", conn)
+        st.dataframe(df_orders, hide_index=True, use_container_width=True)
+        
+    with tab3:
+        st.subheader("Manage Catalog")
+        df_cat = pd.read_sql("SELECT * FROM Catalog", conn)
+        edited_cat = st.data_editor(df_cat, num_rows="dynamic", use_container_width=True, hide_index=True)
+        if st.button("Save Catalog Changes"):
+            edited_cat.to_sql("Catalog", conn, if_exists="replace", index=False)
+            st.success("Catalog updated!")
 
 # --- MAIN ROUTING ---
 if not st.session_state.logged_in:
     page_login()
 else:
+    # Sidebar Profile & Navigation
     with st.sidebar:
         st.write(f"👤 **{st.session_state.user_name}**")
-        st.write(f"💼 Open Tab: €0.00") # Query Users_Dossier for actual amount
-        st.divider()
-        nav = st.radio("Navigation", ["Catalog", "Cart / Checkout", "My Order History"])
-        if st.button("Log Out"):
-            st.session_state.logged_in = False
-            st.rerun()
-
-    if 'last_order' in st.session_state:
-        page_confirmation()
-    elif nav == "Catalog":
-        page_order()
-    elif nav == "Cart / Checkout":
-        page_cart()
-    elif nav == "My Order History":
-        st.title("📜 Order History")
-        st.info("No past orders found. (Connects to Google Sheets Orders tab)")
+        
+        if st.session_state.user_role == "Customer":
+            user_balance = pd.read_sql("SELECT balance FROM Users WHERE email=?", conn, params=(st.session_state.user_email,
