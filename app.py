@@ -246,20 +246,22 @@ def page_order():
                 item_id = row['id']
                 
                 current_qty = st.session_state.cart.get(item_name, {}).get("qty", 0)
-                qty_color = "#2e7d32" if current_qty > 0 else "transparent"
                 
-                # Optimized 4-Column Layout: Stacks info vertically, keeps buttons inline
-                c_info, c_sub, c_qty, c_add = st.columns([5.5, 1.5, 1, 1.5])
+                # 1. Quantity moved directly into the item name box
+                display_name = f"<b>{item_name}</b> ({pack})"
+                if current_qty > 0:
+                    display_name += f" &nbsp; 🟢 <b style='color:#2e7d32; font-size:1.1em;'>{current_qty}</b>"
+                
+                # 2. Tight 3-column layout eliminates the huge gap
+                c_info, c_sub, c_add = st.columns([7, 1.5, 1.5])
                 
                 with c_info:
                     st.markdown(f"""
-                        <b>{item_name}</b> ({pack})<br>
+                        {display_name}<br>
                         <small><del style='color:red;'>€{jamoona:.2f}</del> &nbsp; <b style='color:green;'>€{price:.2f}</b></small>
                     """, unsafe_allow_html=True)
                 with c_sub:
                     st.button("➖", key=f"sub_{item_id}", on_click=update_cart, args=(item_name, price, -1))
-                with c_qty:
-                    st.markdown(f"<div style='text-align:center; padding-top:0.6rem; font-weight:bold; color:{qty_color};'>{current_qty}</div>", unsafe_allow_html=True)
                 with c_add:
                     st.button("➕", key=f"add_{item_id}", on_click=update_cart, args=(item_name, price, 1))
                 
@@ -357,7 +359,18 @@ def page_admin():
     with tab2:
         st.subheader("Order History")
         df_orders = pd.read_sql("SELECT order_id, date, user_email, total_amount, status FROM Orders ORDER BY date DESC", conn)
-        st.dataframe(df_orders, hide_index=True, use_container_width=True)
+        
+        if df_orders.empty:
+            st.info("No orders found.")
+        else:
+            for _, order in df_orders.iterrows():
+                status_icon = "🟢" if order['status'] == "Settled" else "🔴 Open"
+                
+                # Creates an expandable row for every order to view the itemized breakdown
+                with st.expander(f"📦 Order {order['order_id']} | {order['user_email']} | €{order['total_amount']:.2f} | {status_icon}"):
+                    st.write(f"**Date:** {order['date']}")
+                    items = pd.read_sql("SELECT item_name, qty, unit_price, subtotal FROM OrderLineItems WHERE order_id=?", conn, params=(order['order_id'],))
+                    st.dataframe(items, hide_index=True, use_container_width=True)
         
     with tab3:
         st.subheader("Manage Catalog")
