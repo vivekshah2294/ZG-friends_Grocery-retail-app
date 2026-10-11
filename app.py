@@ -227,7 +227,7 @@ def page_login():
 # --- PAGE: CUSTOMER ORDERING CATALOG ---
 def page_order():
     st.title(f"👋 Hi, {st.session_state.user_name}!")
-    st.write("Browse the catalog and tap to add items to your cart.")
+    st.write("Browse the catalog below. **Tap on any item name to add it to your order.**")
     
     df_catalog = pd.read_sql("SELECT * FROM Catalog", conn)
     if df_catalog.empty:
@@ -247,25 +247,22 @@ def page_order():
                 
                 current_qty = st.session_state.cart.get(item_name, {}).get("qty", 0)
                 
-                # 1. Quantity moved directly into the item name box
-                display_name = f"<b>{item_name}</b> ({pack})"
+                # 1. The "Tap-to-Add" Button Logic
+                # We build a single button string that includes the item, price, and active quantity
+                btn_label = f"{item_name} ({pack}) | €{price:.2f}"
                 if current_qty > 0:
-                    display_name += f" &nbsp; 🟢 <b style='color:#2e7d32; font-size:1.1em;'>{current_qty}</b>"
+                     btn_label += f"   🟢 {current_qty}"
                 
-                # 2. Tight 3-column layout eliminates the huge gap
-                c_info, c_sub, c_add = st.columns([7, 1.5, 1.5])
+                # 2. Asymmetric 2-Column Layout (No empty space)
+                # The main item button gets 85% of the width, the minus button gets 15%
+                c_main, c_sub = st.columns([6, 1])
                 
-                with c_info:
-                    st.markdown(f"""
-                        {display_name}<br>
-                        <small><del style='color:red;'>€{jamoona:.2f}</del> &nbsp; <b style='color:green;'>€{price:.2f}</b></small>
-                    """, unsafe_allow_html=True)
+                with c_main:
+                    # Clicking the large item button directly adds +1
+                    st.button(btn_label, key=f"add_{item_id}", on_click=update_cart, args=(item_name, price, 1), use_container_width=True)
                 with c_sub:
-                    st.button("➖", key=f"sub_{item_id}", on_click=update_cart, args=(item_name, price, -1))
-                with c_add:
-                    st.button("➕", key=f"add_{item_id}", on_click=update_cart, args=(item_name, price, 1))
-                
-                st.markdown("<hr style='margin: 0.2rem 0; opacity: 0.1;'>", unsafe_allow_html=True)
+                    # Compact minus button for corrections
+                    st.button("➖", key=f"sub_{item_id}", on_click=update_cart, args=(item_name, price, -1), use_container_width=True)
 
 # --- PAGE: CUSTOMER CART & CHECKOUT ---
 def page_cart():
