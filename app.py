@@ -10,19 +10,29 @@ from email.mime.text import MIMEText
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Zin & Gin Retail", layout="wide", initial_sidebar_state="collapsed")
 
-# --- CSS STYLING ---
+# --- MOBILE UI OPTIMIZATION CSS ---
 st.markdown("""
     <style>
     .block-container { padding-top: 1rem; padding-bottom: 2rem; }
+    
     div[data-testid="stButton"] button {
-        height: 3rem; font-weight: bold; border-radius: 8px; width: 100%;
+        height: 2.8rem; font-weight: bold; border-radius: 6px; width: 100%;
     }
+    
+    /* Aggressive Mobile Flexbox to stop horizontal scroll */
     @media (max-width: 576px) {
         [data-testid="stHorizontalBlock"] {
-            flex-direction: row !important; flex-wrap: nowrap !important; align-items: center !important; gap: 0.25rem !important;
+            flex-direction: row !important; flex-wrap: nowrap !important; align-items: center !important; gap: 0.2rem !important;
         }
         [data-testid="column"] {
             width: auto !important; flex: 1 1 0% !important; min-width: 0 !important; padding: 0 !important;
+        }
+        /* Force text to wrap instead of pushing screen wider */
+        div[data-testid="stMarkdownContainer"] p {
+            white-space: normal !important;
+            font-size: 0.85rem !important;
+            line-height: 1.2 !important;
+            margin-bottom: 0 !important;
         }
     }
     </style>
@@ -33,7 +43,6 @@ st.markdown("""
 def get_db_connection():
     conn = sqlite3.connect("retail_orders.db", check_same_thread=False)
     
-    # Create Tables
     conn.execute("""
         CREATE TABLE IF NOT EXISTS Users (
             email TEXT PRIMARY KEY,
@@ -75,13 +84,11 @@ def get_db_connection():
         )
     """)
     
-    # Seed Admin User if not exists
     admin_email = "zinandgin@gmail.com"
     admin_pass = hashlib.sha256("admin123".encode()).hexdigest()
     conn.execute("INSERT OR IGNORE INTO Users (email, name, password_hash, role) VALUES (?, ?, ?, ?)", 
                  (admin_email, "Admin", admin_pass, "Admin"))
     
-    # Seed Catalog if empty
     if pd.read_sql("SELECT COUNT(*) FROM Catalog", conn).iloc[0,0] == 0:
         full_catalog = [
             ("Flours & Grains", "Aashirwaad Atta", "10 kg", 15.79, 14.50),
@@ -118,7 +125,7 @@ def get_db_connection():
             ("Blended Masalas", "Chaat Masala (MDH Chunky Chat)", "100 g", 2.49, 1.90),
             ("Fresh & Perishables", "Fresh Green Chilli", "500 g", 4.99, 4.75),
             ("Fresh & Perishables", "Fresh Curry Leaves", "50 g", 1.89, 1.55),
-            ("Fresh & Perishables", "Fresh Idli/Dosa Batter", "1 kg", 5.19, 5.99),
+            ("Fresh & Perishables", "Fresh Idli/Dosa Batter", "1 kg", 5.19, 4.45),
             ("Fresh & Perishables", "Paneer Block", "1 kg", 13.38, 11.50),
             ("Pantry & Specialty", "Ghee (GRB / Khanum / TRS / Amul)", "1 L / 1 kg", 22.89, 20.50),
             ("Pantry & Specialty", "Cashew Nuts Broken (Kaju Tukda)", "500 g", 8.49, 6.90),
@@ -145,15 +152,18 @@ def update_cart(item, price, delta):
     else:
         st.session_state.cart[item] = {"qty": new_qty, "price": price}
 
-def send_admin_email_alert(order_id, user_name, total_amount, method):
-    # Requires st.secrets to be configured with an app password
+def send_admin_email_alert(order_id, user_name, total_amount, method, cart_items):
     try:
         if "email" in st.secrets:
             sender = st.secrets["email"]["sender"]
             pwd = st.secrets["email"]["password"]
-            receiver = "zinandgin@gmail.com"
+            receiver = "zinandgin@gmail.com"  # Hardcoded routing to admin email
             
-            body = f"New order placed by {user_name}!\n\nOrder ID: {order_id}\nTotal: €{total_amount:.2f}\nMethod: {method}\n\nLog into the Admin portal to view details."
+            items_str = ""
+            for item in cart_items:
+                items_str += f"- {item['qty']}x {item['item_name']} (€{item['subtotal']:.2f})\n"
+                
+            body = f"New order placed by {user_name}!\n\nOrder ID: {order_id}\nTotal: €{total_amount:.2f}\nMethod: {method}\n\nItemized List:\n{items_str}\n\nLog into the Admin portal to view ledger details."
             msg = MIMEText(body)
             msg["Subject"] = f"🛒 New Retail Order: €{total_amount:.2f}"
             msg["From"] = f"Zin & Gin Retail <{sender}>"
@@ -163,7 +173,7 @@ def send_admin_email_alert(order_id, user_name, total_amount, method):
                 server.login(sender, pwd)
                 server.send_message(msg)
     except Exception as e:
-        print(f"Email failed (this is expected if secrets aren't set up yet): {e}")
+        print(f"Email skipped: {e}")
 
 # --- SESSION STATE INITIALIZATION ---
 if 'logged_in' not in st.session_state:
@@ -220,45 +230,40 @@ def page_order():
     st.write("Browse the catalog and tap to add items to your cart.")
     
     df_catalog = pd.read_sql("SELECT * FROM Catalog", conn)
-    
     if df_catalog.empty:
         st.warning("Catalog is empty.")
         return
 
     for category in df_catalog['category'].unique():
-        with st.expander(f"🛒 {category}", expanded=True):
+        with st.expander(f"🛒 {category}", expanded=False):
             cat_items = df_catalog[df_catalog['category'] == category]
-            
-            c_name, c_jamoona, c_price, c_actions = st.columns([4, 2, 2, 3])
-            c_name.markdown("**Item**")
-            c_jamoona.markdown("**Jamoona**")
-            c_price.markdown("**Our Price**")
-            st.divider()
             
             for _, row in cat_items.iterrows():
                 item_name = str(row['item_name'])
                 pack = str(row['pack_size'])
                 jamoona = row['jamoona_price']
                 price = row['friends_price']
+                item_id = row['id']
                 
                 current_qty = st.session_state.cart.get(item_name, {}).get("qty", 0)
+                qty_color = "#2e7d32" if current_qty > 0 else "transparent"
                 
-                c1, c2, c3, c4 = st.columns([4, 2, 2, 3])
+                # Optimized 4-Column Layout: Stacks info vertically, keeps buttons inline
+                c_info, c_sub, c_qty, c_add = st.columns([5.5, 1.5, 1, 1.5])
                 
-                display_name = f"{item_name} ({pack})"
-                if current_qty > 0:
-                     display_name += f"   🟢 **{current_qty}**"
-                c1.write(display_name)
-                c2.markdown(f"<span style='color:red; text-decoration:line-through;'>€{jamoona:.2f}</span>", unsafe_allow_html=True)
-                c3.markdown(f"**€{price:.2f}**")
+                with c_info:
+                    st.markdown(f"""
+                        <b>{item_name}</b> ({pack})<br>
+                        <small><del style='color:red;'>€{jamoona:.2f}</del> &nbsp; <b style='color:green;'>€{price:.2f}</b></small>
+                    """, unsafe_allow_html=True)
+                with c_sub:
+                    st.button("➖", key=f"sub_{item_id}", on_click=update_cart, args=(item_name, price, -1))
+                with c_qty:
+                    st.markdown(f"<div style='text-align:center; padding-top:0.6rem; font-weight:bold; color:{qty_color};'>{current_qty}</div>", unsafe_allow_html=True)
+                with c_add:
+                    st.button("➕", key=f"add_{item_id}", on_click=update_cart, args=(item_name, price, 1))
                 
-                ac1, ac2 = c4.columns(2)
-                with ac1:
-                    st.button("➖", key=f"sub_{item_name}", on_click=update_cart, args=(item_name, price, -1))
-                with ac2:
-                    st.button("➕", key=f"add_{item_name}", on_click=update_cart, args=(item_name, price, 1))
-                
-                st.markdown("<hr style='margin: 0.5rem 0; opacity: 0.2;'>", unsafe_allow_html=True)
+                st.markdown("<hr style='margin: 0.2rem 0; opacity: 0.1;'>", unsafe_allow_html=True)
 
 # --- PAGE: CUSTOMER CART & CHECKOUT ---
 def page_cart():
@@ -287,20 +292,17 @@ def page_cart():
         order_id = str(uuid.uuid4())[:8].upper()
         order_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
-        # Write Order
         conn.execute("INSERT INTO Orders (order_id, date, user_email, total_amount, payment_method, status) VALUES (?, ?, ?, ?, ?, ?)",
                      (order_id, order_date, st.session_state.user_email, total_due, payment_method, "Open"))
         
-        # Write Line Items
         for item in cart_items:
             conn.execute("INSERT INTO OrderLineItems (order_id, item_name, qty, unit_price, subtotal) VALUES (?, ?, ?, ?, ?)",
                          (order_id, item["item_name"], item["qty"], item["unit_price"], item["subtotal"]))
         
-        # Update User Balance
         conn.execute("UPDATE Users SET balance = balance + ? WHERE email = ?", (total_due, st.session_state.user_email))
         conn.commit()
         
-        send_admin_email_alert(order_id, st.session_state.user_name, total_due, payment_method)
+        send_admin_email_alert(order_id, st.session_state.user_name, total_due, payment_method, cart_items)
         
         st.session_state.last_order = {"id": order_id, "total": total_due, "method": payment_method}
         st.session_state.cart = {}
@@ -314,11 +316,28 @@ def page_confirmation():
         del st.session_state.last_order
         st.rerun()
 
+# --- PAGE: MY PAST ORDERS (CUSTOMER VIEW) ---
+def page_customer_orders():
+    st.title("📜 My Past Orders")
+    st.write("Review your historical purchases.")
+    
+    df_orders = pd.read_sql("SELECT order_id, date, total_amount, status FROM Orders WHERE user_email=? ORDER BY date DESC", conn, params=(st.session_state.user_email,))
+    
+    if df_orders.empty:
+        st.info("You haven't placed any orders yet.")
+        return
+        
+    for _, order in df_orders.iterrows():
+        status_icon = "🟢" if order['status'] == "Settled" else "🔴"
+        with st.expander(f"📦 Order {order['order_id']} | {order['date']} | €{order['total_amount']:.2f} {status_icon}"):
+            items = pd.read_sql("SELECT item_name, qty, unit_price, subtotal FROM OrderLineItems WHERE order_id=?", conn, params=(order['order_id'],))
+            st.dataframe(items, hide_index=True, use_container_width=True)
+
 # --- PAGE: ADMIN DASHBOARD ---
 def page_admin():
     st.title("🛡️ Admin Dashboard")
     
-    tab1, tab2, tab3 = st.tabs(["Friend Dossiers (Balances)", "All Orders", "Catalog Manager"])
+    tab1, tab2, tab3 = st.tabs(["Friend Dossiers", "All Orders", "Catalog Manager"])
     
     with tab1:
         st.subheader("Open Tabs & User Balances")
@@ -352,7 +371,6 @@ def page_admin():
 if not st.session_state.logged_in:
     page_login()
 else:
-    # Sidebar Profile & Navigation
     with st.sidebar:
         st.write(f"👤 **{st.session_state.user_name}**")
         
@@ -360,11 +378,10 @@ else:
             user_balance = pd.read_sql("SELECT balance FROM Users WHERE email=?", conn, params=(st.session_state.user_email,)).iloc[0,0]
             st.write(f"💼 Open Tab: **€{user_balance:.2f}**")
             st.divider()
-            nav = st.radio("Navigation", ["Catalog", "Cart / Checkout"])
+            nav = st.radio("Navigation", ["Catalog", "Cart / Checkout", "My Past Orders"])
         else:
             st.write("🛡️ **Admin Account**")
             st.divider()
-            # FIX: Give the admin a full navigation menu instead of locking them to one page
             nav = st.radio("Navigation", ["Admin Dashboard", "Catalog", "Cart / Checkout"])
 
         if st.button("Log Out"):
@@ -372,12 +389,14 @@ else:
             st.session_state.cart = {}
             st.rerun()
 
-    # View Router (Must be outside the sidebar block)
+    # View Router
     if 'last_order' in st.session_state:
         page_confirmation()
     elif nav == "Catalog":
         page_order()
     elif nav == "Cart / Checkout":
         page_cart()
+    elif nav == "My Past Orders":
+        page_customer_orders()
     elif nav == "Admin Dashboard":
         page_admin()
