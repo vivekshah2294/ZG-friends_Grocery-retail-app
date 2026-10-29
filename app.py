@@ -81,8 +81,7 @@ def get_db_connection():
             item_name TEXT,
             qty INTEGER,
             price REAL,
-            remarks TEXT DEFAULT '',
-            PRIMARY KEY (user_email, item_name)
+            remarks TEXT DEFAULT ''
         )
     """)
     conn.execute("""
@@ -92,7 +91,8 @@ def get_db_connection():
             user_email TEXT,
             total_amount REAL,
             payment_method TEXT,
-            status TEXT
+            status TEXT,
+            keep_note TEXT DEFAULT ''
         )
     """)
     conn.execute("""
@@ -109,7 +109,7 @@ def get_db_connection():
     """)
     
     # Automatic Schema Patching for existing databases
-    for table, col, col_type in [("OrderLineItems", "remarks", "TEXT DEFAULT ''"), ("DraftCarts", "remarks", "TEXT DEFAULT ''")]:
+    for table, col, col_type in [("OrderLineItems", "remarks", "TEXT DEFAULT ''"), ("DraftCarts", "remarks", "TEXT DEFAULT ''"), ("Orders", "keep_note", "TEXT DEFAULT ''")]:
         try:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
         except sqlite3.OperationalError:
@@ -145,54 +145,56 @@ conn = get_db_connection()
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
-def update_draft_cart(email, item_name, price, delta):
+def update_draft_cart(email, item_name, price, delta, remark=""):
     cur = conn.cursor()
     cur.execute("SELECT qty, remarks FROM DraftCarts WHERE user_email=? AND item_name=?", (email, item_name))
     row = cur.fetchone()
     
     current_qty = row[0] if row else 0
-    current_remark = row[1] if row else ""
+    current_remark = row[1] if row else remark
     new_qty = max(0, current_qty + delta)
     
     if new_qty == 0:
         cur.execute("DELETE FROM DraftCarts WHERE user_email=? AND item_name=?", (email, item_name))
     else:
-        if row:
-            cur.execute("UPDATE DraftCarts SET qty=? WHERE user_email=? AND item_name=?", (new_qty, email, item_name))
-        else:
+        # Safe update-then-insert pattern (immune to constraint errors)
+        cur.execute("UPDATE DraftCarts SET qty=?, price=?, remarks=? WHERE user_email=? AND item_name=?", 
+                    (new_qty, price, current_remark, email, item_name))
+        if cur.rowcount == 0:
             cur.execute("INSERT INTO DraftCarts (user_email, item_name, qty, price, remarks) VALUES (?, ?, ?, ?, ?)", 
                         (email, item_name, new_qty, price, current_remark))
     
     conn.commit()
 
-def update_draft_remark_from_state(email, item_name, price, state_key):
-    val = st.session_state[state_key]
+def save_draft_remark(email, item_name, price, remark):
     cur = conn.cursor()
     cur.execute("SELECT qty FROM DraftCarts WHERE user_email=? AND item_name=?", (email, item_name))
     row = cur.fetchone()
     
     if row:
-        cur.execute("UPDATE DraftCarts SET remarks=? WHERE user_email=? AND item_name=?", (val, email, item_name))
+        cur.execute("UPDATE DraftCarts SET remarks=? WHERE user_email=? AND item_name=?", (remark, email, item_name))
     else:
         cur.execute("INSERT INTO DraftCarts (user_email, item_name, qty, price, remarks) VALUES (?, ?, ?, ?, ?)", 
-                    (email, item_name, 0, price, val))
+                    (email, item_name, 0, price, remark))
     conn.commit()
 
-def send_admin_email_alert(order_id, user_name, total_amount, method, df_cart):
+def generate_keep_note(order_id, user_name, date_str, line_items):
+    msg = f"🛒 Zin & Gin Order {order_id} - {date_str}\nUser: {user_name}\n\n"
+    for _, row in line_items.iterrows():
+        rem_text = f" [{row['remarks']}]" if row['remarks'] and str(row['remarks']).strip() else ""
+        msg += f"    {row['qty']}x {row['item_name']}{rem_text}\n"
+    return msg
+
+def send_admin_email_alert(order_id, user_name, total_amount, method, keep_note_text):
     try:
         if "email" in st.secrets:
             sender = st.secrets["email"]["sender"]
             pwd = st.secrets["email"]["password"]
             receiver = "zinandgin@gmail.com"
             
-            items_str = ""
-            for _, item in df_cart.iterrows():
-                rem = f" [{item['remarks']}]" if item['remarks'] else ""
-                items_str += f"- {item['qty']}x {item['item_name']} (€{item['subtotal']:.2f}){rem}\n"
-                
-            body = f"New order placed by {user_name}!\n\nOrder ID: {order_id}\nTotal: €{total_amount:.2f}\nMethod: {method}\n\nItemized List:\n{items_str}\n\nLog into the Admin portal to view ledger details."
+            body = f"An order was finalized for {user_name}.\n\nOrder ID: {order_id}\nTotal: €{total_amount:.2f}\nMethod: {method}\n\n📋 Order Breakdown:\n{keep_note_text}"
             msg = MIMEText(body)
-            msg["Subject"] = f"🛒 New Retail Order: €{total_amount:.2f}"
+            msg["Subject"] = f"✅ Finalized Retail Order: €{total_amount:.2f}"
             msg["From"] = f"Zin & Gin Retail <{sender}>"
             msg["To"] = receiver
             
@@ -200,7 +202,7 @@ def send_admin_email_alert(order_id, user_name, total_amount, method, df_cart):
                 server.login(sender, pwd)
                 server.send_message(msg)
     except Exception as e:
-        print(f"Email failed: {e}")
+        print(f"Email skipped: {e}")
 
 def automated_db_backup(db_path=DB_PATH, backup_interval_hours=48):
     """Silently emails the retail_orders.db file to the admin if 48 hours have passed."""
@@ -318,7 +320,6 @@ def page_order():
             for _, row in cat_items.iterrows():
                 item_name = str(row['item_name'])
                 pack = str(row['pack_size'])
-                jamoona = row['jamoona_price']
                 price = row['friends_price']
                 item_id = row['id']
                 
@@ -326,20 +327,21 @@ def page_order():
                 current_qty = draft_data.get("qty", 0)
                 current_remark = draft_data.get("remarks", "")
                 
-                c1, c_sub, c_pen = st.columns([1, 0.1, 0.1])
-                with c1:
-                    btn_label = f"{item_name} ({pack}) - €{price:.2f}"
-                    if current_qty > 0:
-                         btn_label += f"   🟢 {current_qty}"
-                    st.button(btn_label, key=f"add_{item_id}", on_click=update_draft_cart, args=(st.session_state.user_email, item_name, price, 1), use_container_width=True)
+                btn_label = f"{item_name} ({pack}) | €{price:.2f}"
+                if current_qty > 0:
+                     btn_label += f"   🟢 {current_qty}"
                 
+                c_main, c_sub = st.columns([6, 1])
+                with c_main:
+                    st.button(btn_label, key=f"add_{item_id}", on_click=update_draft_cart, args=(st.session_state.user_email, item_name, price, 1), use_container_width=True)
                 with c_sub:
                     st.button("➖", key=f"sub_{item_id}", on_click=update_draft_cart, args=(st.session_state.user_email, item_name, price, -1), use_container_width=True)
-                    
-                with c_pen:
-                    with st.popover("✏️", use_container_width=True):
-                        st.text_input("Add Remark:", value=current_remark, key=f"pop_rem_{item_id}", 
-                                      on_change=update_draft_remark_from_state, args=(st.session_state.user_email, item_name, price, f"pop_rem_{item_id}"))
+                
+                with st.expander("💬 Add Remark", expanded=False):
+                    new_remark = st.text_input("Special instructions (e.g., ripe, urgent)", value=current_remark, key=f"rem_{item_id}", label_visibility="collapsed")
+                    if new_remark != current_remark:
+                        save_draft_remark(st.session_state.user_email, item_name, price, new_remark)
+                        st.rerun()
 
     # --- DYNAMIC REVIEW CART BUTTON ---
     if not df_draft.empty:
@@ -376,59 +378,84 @@ def page_cart():
     
     payment_method = st.radio("Payment Method", ["Add to my Tab (Settle End of Month)", "Tikkie / Pay Now"])
     
-    if st.button("✅ Place Final Order", type="primary", use_container_width=True):
+    if st.button("📤 Save Draft & Send to Manager", type="primary", use_container_width=True):
         order_id = str(uuid.uuid4())[:8].upper()
         order_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         conn.execute("INSERT INTO Orders (order_id, date, user_email, total_amount, payment_method, status) VALUES (?, ?, ?, ?, ?, ?)",
-                     (order_id, order_date, st.session_state.user_email, total_due, payment_method, "Open"))
+                     (order_id, order_date, st.session_state.user_email, total_due, payment_method, "Draft"))
         
         for _, row in df_cart.iterrows():
             conn.execute("INSERT INTO OrderLineItems (order_id, item_name, qty, unit_price, subtotal, remarks) VALUES (?, ?, ?, ?, ?, ?)",
                          (order_id, row["item_name"], row["qty"], row["price"], row["subtotal"], row["remarks"]))
         
-        conn.execute("UPDATE Users SET balance = balance + ? WHERE email = ?", (total_due, st.session_state.user_email))
         conn.execute("DELETE FROM DraftCarts WHERE user_email=?", (st.session_state.user_email,))
         conn.commit()
         
-        send_admin_email_alert(order_id, st.session_state.user_name, total_due, payment_method, df_cart)
-        
-        st.session_state.last_order = {"id": order_id, "total": total_due, "method": payment_method}
+        st.session_state.last_order = {"id": order_id, "status": "Draft Review Pending"}
         st.rerun()
 
 def page_confirmation():
-    order = st.session_state.last_order
-    st.success("🎉 Order Placed Successfully!")
-    st.markdown(f"### Invoice Summary\n* **Order ID:** {order['id']}\n* **Total Amount Due:** €{order['total']:.2f}\n* **Payment Method:** {order['method']}")
+    st.success("🎉 Draft Saved! The manager will review your order shortly.")
     if st.button("Return to Catalog"):
         del st.session_state.last_order
+        st.session_state.active_tab = "Catalog"
         st.rerun()
 
 # --- PAGE: MY PAST ORDERS (CUSTOMER VIEW) ---
 def page_customer_orders():
     st.title("📜 My Past Orders")
-    st.write("Review your historical purchases.")
+    st.write("Review your finalized purchases.")
     
-    df_orders = pd.read_sql("SELECT order_id, date, total_amount, status FROM Orders WHERE user_email=? ORDER BY date DESC", conn, params=(st.session_state.user_email,))
+    df_orders = pd.read_sql("SELECT order_id, date, total_amount, status, keep_note FROM Orders WHERE user_email=? AND status != 'Draft' ORDER BY date DESC", conn, params=(st.session_state.user_email,))
     
     if df_orders.empty:
-        st.info("You haven't placed any orders yet.")
+        st.info("No finalized orders found.")
         return
         
     for _, order in df_orders.iterrows():
         status_icon = "🟢" if order['status'] == "Settled" else "🔴"
         with st.expander(f"📦 Order {order['order_id']} | {order['date']} | €{order['total_amount']:.2f} {status_icon}"):
-            items = pd.read_sql("SELECT item_name, qty, unit_price, subtotal, remarks FROM OrderLineItems WHERE order_id=?", conn, params=(order['order_id'],))
-            st.dataframe(items, hide_index=True, use_container_width=True)
+            st.text_area("Google Keep Note", value=order['keep_note'], height=150, disabled=True, key=f"gk_cust_{order['order_id']}")
 
 # --- PAGE: ADMIN DASHBOARD ---
 def page_admin():
     st.title("🛡️ Admin Dashboard")
     
-    tab1, tab2, tab3, tab4 = st.tabs(["Friend Dossiers", "All Orders", "Analytics", "System"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Pending Drafts", "Past Orders & Ledgers", "Analytics", "System"])
     
     with tab1:
-        st.subheader("Open Tabs & User Balances")
+        st.subheader("Review Pending Orders")
+        df_drafts = pd.read_sql("SELECT order_id, date, user_email, total_amount, payment_method FROM Orders WHERE status='Draft' ORDER BY date DESC", conn)
+        
+        if df_drafts.empty:
+            st.info("No pending drafts.")
+        else:
+            for _, draft in df_drafts.iterrows():
+                o_id = draft['order_id']
+                with st.expander(f"⏳ Draft: {o_id} | {draft['user_email']} | €{draft['total_amount']:.2f}"):
+                    df_items = pd.read_sql("SELECT line_id, item_name, qty, unit_price, subtotal, remarks FROM OrderLineItems WHERE order_id=?", conn, params=(o_id,))
+                    edited_items = st.data_editor(df_items, key=f"edit_{o_id}", hide_index=True, use_container_width=True)
+                    
+                    if st.button("✅ Finalize Order & Update Stock", key=f"fin_{o_id}", type="primary"):
+                        new_total = 0.0
+                        for _, row in edited_items.iterrows():
+                            subt = row['qty'] * row['unit_price']
+                            new_total += subt
+                            conn.execute("UPDATE OrderLineItems SET qty=?, subtotal=?, remarks=? WHERE line_id=?", (row['qty'], subt, row['remarks'], row['line_id']))
+                        
+                        keep_txt = generate_keep_note(o_id, draft['user_email'], draft['date'], edited_items)
+                        
+                        conn.execute("UPDATE Orders SET status='Open', total_amount=?, keep_note=? WHERE order_id=?", (new_total, keep_txt, o_id))
+                        conn.execute("UPDATE Users SET balance = balance + ? WHERE email = ?", (new_total, draft['user_email']))
+                        conn.commit()
+                        
+                        send_admin_email_alert(o_id, draft['user_email'], new_total, draft['payment_method'], keep_txt)
+                        st.success(f"Order {o_id} Finalized!")
+                        st.rerun()
+
+    with tab2:
+        st.subheader("Ledgers & History")
         df_users = pd.read_sql("SELECT name, email, balance FROM Users WHERE role='Customer'", conn)
         st.dataframe(df_users, hide_index=True, use_container_width=True)
         
@@ -442,14 +469,11 @@ def page_admin():
                     st.success("Balance settled!")
                     st.rerun()
                     
-    with tab2:
-        st.subheader("Order History")
-        df_orders = pd.read_sql("SELECT order_id, date, user_email, total_amount, status FROM Orders ORDER BY date DESC", conn)
-        
+        st.write("### Past Orders")
+        df_orders = pd.read_sql("SELECT order_id, date, user_email, total_amount, status, keep_note FROM Orders WHERE status != 'Draft' ORDER BY date DESC", conn)
         for _, order in df_orders.iterrows():
-            with st.expander(f"📦 {order['order_id']} | {order['user_email']} | €{order['total_amount']:.2f} ({order['status']})"):
-                items = pd.read_sql("SELECT item_name, qty, unit_price, subtotal, remarks FROM OrderLineItems WHERE order_id=?", conn, params=(order['order_id'],))
-                st.dataframe(items, hide_index=True, use_container_width=True)
+            with st.expander(f"📦 {order['order_id']} | {order['user_email']} | €{order['total_amount']:.2f}"):
+                st.text_area("Keep Note", value=order['keep_note'], height=150, disabled=True, key=f"gk_adm_{order['order_id']}")
                 
                 if st.button("🗑️ Delete Test Order (Reverses Balance)", key=f"del_{order['order_id']}"):
                     if order['status'] != 'Settled':
@@ -458,7 +482,7 @@ def page_admin():
                     conn.execute("DELETE FROM Orders WHERE order_id=?", (order['order_id'],))
                     conn.commit()
                     st.rerun()
-                    
+
     with tab3:
         st.subheader("Retail Sales Analytics")
         query = """
