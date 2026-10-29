@@ -25,32 +25,22 @@ st.markdown("""
     }
     
     @media (max-width: 576px) {
-        /* Force single-line row */
         [data-testid="stHorizontalBlock"] {
             flex-direction: row !important; flex-wrap: nowrap !important; gap: 4px !important; align-items: center !important;
         }
-        
-        /* Column 1: Main Item Button (Takes all remaining width) */
         [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(1) {
             width: auto !important; flex: 1 1 0% !important; min-width: 0 !important; padding: 0 !important;
         }
-        
-        /* Column 2: Minus Button (Locked to 40px) */
         [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(2) {
             width: 40px !important; flex: 0 0 40px !important; min-width: 40px !important; max-width: 40px !important; padding: 0 !important;
         }
-        
-        /* Column 3: Pencil Button (Locked to 40px) */
         [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(3) {
             width: 40px !important; flex: 0 0 40px !important; min-width: 40px !important; max-width: 40px !important; padding: 0 !important;
         }
-
-        /* Strip padding from the small buttons so the icons fit */
         [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(2) button,
         [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(3) button {
             min-width: 0 !important; padding: 0 !important; display: flex !important; justify-content: center !important;
         }
-
         div[data-testid="stButton"] button p, div[data-testid="stMarkdownContainer"] p {
             font-size: 0.85rem !important; white-space: normal !important; overflow: hidden !important; text-overflow: ellipsis !important;
         }
@@ -118,12 +108,18 @@ def get_db_connection():
         )
     """)
     
+    # Automatic Schema Patching for existing databases
+    for table, col, col_type in [("OrderLineItems", "remarks", "TEXT DEFAULT ''"), ("DraftCarts", "remarks", "TEXT DEFAULT ''")]:
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
+        except sqlite3.OperationalError:
+            pass # Column already exists
+            
     conn.commit()
     
-    # Safe Admin Seeding (Checking if table exists and user exists separately)
+    # Seed Admin User if not exists
     admin_email = "zinandgin@gmail.com"
     admin_pass = hashlib.sha256("admin123".encode()).hexdigest()
-    
     cur = conn.cursor()
     cur.execute("SELECT email FROM Users WHERE email = ?", (admin_email,))
     if not cur.fetchone():
@@ -141,24 +137,6 @@ def get_db_connection():
         conn.executemany("INSERT INTO Catalog (category, item_name, pack_size, jamoona_price, friends_price) VALUES (?, ?, ?, ?, ?)", dummy_catalog)
         conn.commit()
         
-    return conn
-    
-    # Seed Admin User if not exists
-    admin_email = "zinandgin@gmail.com"
-    admin_pass = hashlib.sha256("admin123".encode()).hexdigest()
-    conn.execute("INSERT OR IGNORE INTO Users (email, name, password_hash, role) VALUES (?, ?, ?, ?)", 
-                 (admin_email, "Admin", admin_pass, "Admin"))
-    
-    # Seed Catalog if empty
-    if pd.read_sql("SELECT COUNT(*) FROM Catalog", conn).iloc[0,0] == 0:
-        dummy_catalog = [
-            ("Dals & Legumes", "Toor Dal (KRG / Kamal)", "1 kg", 4.19, 3.30),
-            ("Whole Spices", "Jeera Whole (KRG)", "400 g", 5.19, 4.20),
-            ("Flours & Grains", "Aashirwaad Atta", "10 kg", 16.49, 15.65)
-        ]
-        conn.executemany("INSERT INTO Catalog (category, item_name, pack_size, jamoona_price, friends_price) VALUES (?, ?, ?, ?, ?)", dummy_catalog)
-    
-    conn.commit()
     return conn
 
 conn = get_db_connection()
@@ -540,11 +518,9 @@ def page_admin():
 if not st.session_state.logged_in:
     page_login()
 else:
-    # Set default navigation if it doesn't exist
     if 'active_tab' not in st.session_state:
         st.session_state.active_tab = "Catalog"
 
-    # Sidebar Profile & Navigation Setup
     if st.session_state.user_role == "Customer":
         nav_options = ["Catalog", "Cart / Checkout", "My Past Orders"]
     else:
@@ -558,11 +534,10 @@ else:
             st.write(f"💼 Open Tab: **€{user_balance:.2f}**")
         else:
             st.write("🛡️ **Admin Account**")
-            automated_db_backup() # Silently fires backup if 48hrs passed
+            automated_db_backup()
             
         st.divider()
         
-        # Bind the radio button directly to the session state key used in the callback
         st.radio("Navigation", nav_options, key="active_tab")
 
         if st.button("Log Out"):
@@ -572,7 +547,6 @@ else:
                 del st.session_state.last_order
             st.rerun()
 
-    # View Router dynamically tracks the radio button's key
     active_nav = st.session_state.active_tab
 
     if 'last_order' in st.session_state:
