@@ -3,40 +3,67 @@ import pandas as pd
 import sqlite3
 import hashlib
 import uuid
-from datetime import datetime
+from datetime import datetime, date
 import smtplib
 from email.mime.text import MIMEText
-import os
-import time
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders
+import os
+import time
+import plotly.express as px
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Zin & Gin Retail", layout="wide", initial_sidebar_state="collapsed")
 
-# --- CSS STYLING ---
+# --- CSS STYLING & AGGRESSIVE MOBILE FLEXBOX ---
 st.markdown("""
     <style>
-    .block-container { padding-top: 1rem; padding-bottom: 2rem; }
-    div[data-testid="stButton"] button {
-        height: 3rem; font-weight: bold; border-radius: 8px; width: 100%;
+    .block-container { padding-top: 1rem; padding-bottom: 2rem; padding-left: 0.5rem; padding-right: 0.5rem; }
+    div[data-testid="stButton"] button, div[data-testid="stPopover"] button {
+        height: 3rem; font-weight: bold; border-radius: 8px; width: 100%; padding: 0.2rem;
     }
+    
     @media (max-width: 576px) {
+        /* Force single-line row */
         [data-testid="stHorizontalBlock"] {
-            flex-direction: row !important; flex-wrap: nowrap !important; align-items: center !important; gap: 0.25rem !important;
+            flex-direction: row !important; flex-wrap: nowrap !important; gap: 4px !important; align-items: center !important;
         }
-        [data-testid="column"] {
+        
+        /* Column 1: Main Item Button (Takes all remaining width) */
+        [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(1) {
             width: auto !important; flex: 1 1 0% !important; min-width: 0 !important; padding: 0 !important;
+        }
+        
+        /* Column 2: Minus Button (Locked to 40px) */
+        [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(2) {
+            width: 40px !important; flex: 0 0 40px !important; min-width: 40px !important; max-width: 40px !important; padding: 0 !important;
+        }
+        
+        /* Column 3: Pencil Button (Locked to 40px) */
+        [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(3) {
+            width: 40px !important; flex: 0 0 40px !important; min-width: 40px !important; max-width: 40px !important; padding: 0 !important;
+        }
+
+        /* Strip padding from the small buttons so the icons fit */
+        [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(2) button,
+        [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(3) button {
+            min-width: 0 !important; padding: 0 !important; display: flex !important; justify-content: center !important;
+        }
+
+        div[data-testid="stButton"] button p, div[data-testid="stMarkdownContainer"] p {
+            font-size: 0.85rem !important; white-space: normal !important; overflow: hidden !important; text-overflow: ellipsis !important;
         }
     }
     </style>
 """, unsafe_allow_html=True)
 
 # --- LOCAL DATABASE INITIALIZATION ---
+DB_PATH = "retail_orders.db"
+
 @st.cache_resource
 def get_db_connection():
-    conn = sqlite3.connect("retail_orders.db", check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     
     # Create Tables
     conn.execute("""
@@ -59,6 +86,16 @@ def get_db_connection():
         )
     """)
     conn.execute("""
+        CREATE TABLE IF NOT EXISTS DraftCarts (
+            user_email TEXT,
+            item_name TEXT,
+            qty INTEGER,
+            price REAL,
+            remarks TEXT DEFAULT '',
+            PRIMARY KEY (user_email, item_name)
+        )
+    """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS Orders (
             order_id TEXT PRIMARY KEY,
             date TEXT,
@@ -76,6 +113,7 @@ def get_db_connection():
             qty INTEGER,
             unit_price REAL,
             subtotal REAL,
+            remarks TEXT DEFAULT '',
             FOREIGN KEY(order_id) REFERENCES Orders(order_id)
         )
     """)
@@ -104,24 +142,53 @@ conn = get_db_connection()
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
-def update_cart(item, price, delta):
-    current = st.session_state.cart.get(item, {"qty": 0, "price": price})
-    new_qty = max(0, current["qty"] + delta)
+def update_draft_cart(email, item_name, price, delta):
+    cur = conn.cursor()
+    cur.execute("SELECT qty, remarks FROM DraftCarts WHERE user_email=? AND item_name=?", (email, item_name))
+    row = cur.fetchone()
+    
+    current_qty = row[0] if row else 0
+    current_remark = row[1] if row else ""
+    new_qty = max(0, current_qty + delta)
+    
     if new_qty == 0:
-        if item in st.session_state.cart:
-            del st.session_state.cart[item]
+        cur.execute("DELETE FROM DraftCarts WHERE user_email=? AND item_name=?", (email, item_name))
     else:
-        st.session_state.cart[item] = {"qty": new_qty, "price": price}
+        cur.execute("""
+            INSERT INTO DraftCarts (user_email, item_name, qty, price, remarks) 
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(user_email, item_name) DO UPDATE SET qty=excluded.qty
+        """, (email, item_name, new_qty, price, current_remark))
+    
+    conn.commit()
 
-def send_admin_email_alert(order_id, user_name, total_amount, method):
-    # Requires st.secrets to be configured with an app password
+def update_draft_remark_from_state(email, item_name, price, state_key):
+    val = st.session_state[state_key]
+    cur = conn.cursor()
+    cur.execute("SELECT qty FROM DraftCarts WHERE user_email=? AND item_name=?", (email, item_name))
+    row = cur.fetchone()
+    qty = row[0] if row else 0
+    
+    cur.execute("""
+        INSERT INTO DraftCarts (user_email, item_name, qty, price, remarks) 
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(user_email, item_name) DO UPDATE SET remarks=excluded.remarks
+    """, (email, item_name, qty, price, val))
+    conn.commit()
+
+def send_admin_email_alert(order_id, user_name, total_amount, method, df_cart):
     try:
         if "email" in st.secrets:
             sender = st.secrets["email"]["sender"]
             pwd = st.secrets["email"]["password"]
             receiver = "zinandgin@gmail.com"
             
-            body = f"New order placed by {user_name}!\n\nOrder ID: {order_id}\nTotal: €{total_amount:.2f}\nMethod: {method}\n\nLog into the Admin portal to view details."
+            items_str = ""
+            for _, item in df_cart.iterrows():
+                rem = f" [{item['remarks']}]" if item['remarks'] else ""
+                items_str += f"- {item['qty']}x {item['item_name']} (€{item['subtotal']:.2f}){rem}\n"
+                
+            body = f"New order placed by {user_name}!\n\nOrder ID: {order_id}\nTotal: €{total_amount:.2f}\nMethod: {method}\n\nItemized List:\n{items_str}\n\nLog into the Admin portal to view ledger details."
             msg = MIMEText(body)
             msg["Subject"] = f"🛒 New Retail Order: €{total_amount:.2f}"
             msg["From"] = f"Zin & Gin Retail <{sender}>"
@@ -133,32 +200,30 @@ def send_admin_email_alert(order_id, user_name, total_amount, method):
     except Exception as e:
         print(f"Email failed: {e}")
 
-def automated_db_backup(db_path="retail_orders.db", backup_interval_hours=48):
+def automated_db_backup(db_path=DB_PATH, backup_interval_hours=48):
     """Silently emails the retail_orders.db file to the admin if 48 hours have passed."""
     try:
         tracker_file = "last_retail_backup.txt"
         current_time = time.time()
         
-        # Check if enough time has passed since the last backup
         if os.path.exists(tracker_file):
             with open(tracker_file, "r") as f:
                 last_backup = float(f.read().strip())
             if (current_time - last_backup) < (backup_interval_hours * 3600):
                 return
         
-        # Prepare and send the email with the database attached
         if "email" in st.secrets and os.path.exists(db_path):
             sender = st.secrets["email"]["sender"]
             pwd = st.secrets["email"]["password"]
             receiver = "zinandgin@gmail.com"
             
             msg = MIMEMultipart()
-            msg["Subject"] = f"Zin & Gin Retail DB Backup - {datetime.today().strftime('%Y-%m-%d')}"
+            msg["Subject"] = f"Zin & Gin Retail DB Backup - {date.today()}"
             msg["From"] = f"Zin & Gin Retail <{sender}>"
             msg["To"] = receiver
             
             body = MIMEText("Attached is your automated Zin & Gin Retail database backup. Keep this safe to restore your friends' balances and order history if the cloud server restarts.")
-            msg.attach(MIMEText(body, 'plain'))
+            msg.attach(body)
             
             with open(db_path, "rb") as attachment:
                 part = MIMEBase("application", "octet-stream")
@@ -171,7 +236,6 @@ def automated_db_backup(db_path="retail_orders.db", backup_interval_hours=48):
                 server.login(sender, pwd)
                 server.send_message(msg)
                 
-            # Log the successful backup time
             with open(tracker_file, "w") as f:
                 f.write(str(current_time))
                 
@@ -184,10 +248,6 @@ if 'logged_in' not in st.session_state:
     st.session_state.user_email = ""
     st.session_state.user_name = ""
     st.session_state.user_role = ""
-if 'cart' not in st.session_state:
-    st.session_state.cart = {}
-if 'nav_selection' not in st.session_state:
-    st.session_state.nav_selection = "Catalog"
 
 # --- PAGE: LOGIN / SIGNUP ---
 def page_login():
@@ -208,7 +268,7 @@ def page_login():
                     st.session_state.user_email = user.iloc[0]['email']
                     st.session_state.user_name = user.iloc[0]['name']
                     st.session_state.user_role = user.iloc[0]['role']
-                    st.session_state.nav_selection = "Catalog" if user.iloc[0]['role'] == "Customer" else "Admin Dashboard"
+                    st.session_state.active_tab = "Catalog" if user.iloc[0]['role'] == "Customer" else "Admin Dashboard"
                     st.rerun()
                 else:
                     st.error("Invalid credentials.")
@@ -233,56 +293,59 @@ def page_login():
 # --- PAGE: CUSTOMER ORDERING CATALOG ---
 def page_order():
     st.title(f"👋 Hi, {st.session_state.user_name}!")
-    st.write("Browse the catalog and tap to add items to your cart.")
     
+    c_head1, c_head2 = st.columns([3, 1])
+    with c_head1:
+        st.write("Browse the catalog below. **Tap on any item name to add it to your order.**")
+    with c_head2:
+        if st.button("🔄 Sync", use_container_width=True):
+            st.rerun()
+            
     df_catalog = pd.read_sql("SELECT * FROM Catalog", conn)
-    
+    df_draft = pd.read_sql("SELECT item_name, qty, remarks FROM DraftCarts WHERE user_email=?", conn, params=(st.session_state.user_email,))
+    draft_dict = df_draft.set_index('item_name').to_dict('index')
+
     if df_catalog.empty:
         st.warning("Catalog is empty.")
         return
 
     for category in df_catalog['category'].unique():
-        with st.expander(f"🛒 {category}", expanded=True):
+        with st.expander(f"🛒 {category}", expanded=False):
             cat_items = df_catalog[df_catalog['category'] == category]
-            
-            c_name, c_jamoona, c_price, c_actions = st.columns([4, 2, 2, 3])
-            c_name.markdown("**Item**")
-            c_jamoona.markdown("**Jamoona**")
-            c_price.markdown("**Our Price**")
-            st.divider()
             
             for _, row in cat_items.iterrows():
                 item_name = str(row['item_name'])
                 pack = str(row['pack_size'])
                 jamoona = row['jamoona_price']
                 price = row['friends_price']
+                item_id = row['id']
                 
-                current_qty = st.session_state.cart.get(item_name, {}).get("qty", 0)
+                draft_data = draft_dict.get(item_name, {})
+                current_qty = draft_data.get("qty", 0)
+                current_remark = draft_data.get("remarks", "")
                 
-                c1, c2, c3, c4 = st.columns([4, 2, 2, 3])
+                c1, c_sub, c_pen = st.columns([1, 0.1, 0.1])
+                with c1:
+                    btn_label = f"{item_name} ({pack}) - €{price:.2f}"
+                    if current_qty > 0:
+                         btn_label += f"   🟢 {current_qty}"
+                    st.button(btn_label, key=f"add_{item_id}", on_click=update_draft_cart, args=(st.session_state.user_email, item_name, price, 1), use_container_width=True)
                 
-                display_name = f"{item_name} ({pack})"
-                if current_qty > 0:
-                     display_name += f"   🟢 **{current_qty}**"
-                c1.write(display_name)
-                c2.markdown(f"<span style='color:red; text-decoration:line-through;'>€{jamoona:.2f}</span>", unsafe_allow_html=True)
-                c3.markdown(f"**€{price:.2f}**")
-                
-                ac1, ac2 = c4.columns(2)
-                with ac1:
-                    st.button("➖", key=f"sub_{item_name}", on_click=update_cart, args=(item_name, price, -1))
-                with ac2:
-                    st.button("➕", key=f"add_{item_name}", on_click=update_cart, args=(item_name, price, 1))
-                
-                st.markdown("<hr style='margin: 0.5rem 0; opacity: 0.2;'>", unsafe_allow_html=True)
+                with c_sub:
+                    st.button("➖", key=f"sub_{item_id}", on_click=update_draft_cart, args=(st.session_state.user_email, item_name, price, -1), use_container_width=True)
+                    
+                with c_pen:
+                    with st.popover("✏️", use_container_width=True):
+                        st.text_input("Add Remark:", value=current_remark, key=f"pop_rem_{item_id}", 
+                                      on_change=update_draft_remark_from_state, args=(st.session_state.user_email, item_name, price, f"pop_rem_{item_id}"))
 
-   # --- DYNAMIC REVIEW CART BUTTON ---
-    if st.session_state.cart:
+    # --- DYNAMIC REVIEW CART BUTTON ---
+    if not df_draft.empty:
         st.markdown("<br>", unsafe_allow_html=True)
         st.divider()
         
-        cart_qty = sum(item["qty"] for item in st.session_state.cart.values())
-        cart_total = sum(item["qty"] * item["price"] for item in st.session_state.cart.values())
+        cart_qty = df_draft['qty'].sum()
+        cart_total = sum(draft_dict[item]["qty"] * df_catalog.loc[df_catalog['item_name'] == item, 'friends_price'].values[0] for item in draft_dict.keys())
         
         def navigate_to_cart():
             st.session_state.active_tab = "Cart / Checkout"
@@ -297,49 +360,38 @@ def page_order():
 def page_cart():
     st.title("🛍️ Order Summary")
     
-    if not st.session_state.cart:
+    df_cart = pd.read_sql("SELECT item_name, qty, price, remarks FROM DraftCarts WHERE user_email=?", conn, params=(st.session_state.user_email,))
+    
+    if df_cart.empty:
         st.info("Your cart is empty.")
-        if st.button("⬅️ Back to Catalog"):
-            st.session_state.nav_selection = "Catalog"
-            st.rerun()
         return
         
-    cart_items = []
-    total_due = 0.0
+    df_cart['subtotal'] = df_cart['qty'] * df_cart['price']
+    total_due = df_cart['subtotal'].sum()
     
-    for item, data in st.session_state.cart.items():
-        qty = data["qty"]
-        price = data["price"]
-        subtotal = qty * price
-        total_due += subtotal
-        cart_items.append({"item_name": item, "qty": qty, "unit_price": price, "subtotal": subtotal})
-        
-    st.dataframe(pd.DataFrame(cart_items), hide_index=True, use_container_width=True)
+    st.dataframe(df_cart[['item_name', 'qty', 'price', 'subtotal', 'remarks']], hide_index=True, use_container_width=True)
     st.markdown(f"### Total Due: €{total_due:.2f}")
     
     payment_method = st.radio("Payment Method", ["Add to my Tab (Settle End of Month)", "Tikkie / Pay Now"])
     
-    if st.button("✅ Place Order", type="primary", use_container_width=True):
+    if st.button("✅ Place Final Order", type="primary", use_container_width=True):
         order_id = str(uuid.uuid4())[:8].upper()
         order_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
-        # Write Order
         conn.execute("INSERT INTO Orders (order_id, date, user_email, total_amount, payment_method, status) VALUES (?, ?, ?, ?, ?, ?)",
                      (order_id, order_date, st.session_state.user_email, total_due, payment_method, "Open"))
         
-        # Write Line Items
-        for item in cart_items:
-            conn.execute("INSERT INTO OrderLineItems (order_id, item_name, qty, unit_price, subtotal) VALUES (?, ?, ?, ?, ?)",
-                         (order_id, item["item_name"], item["qty"], item["unit_price"], item["subtotal"]))
+        for _, row in df_cart.iterrows():
+            conn.execute("INSERT INTO OrderLineItems (order_id, item_name, qty, unit_price, subtotal, remarks) VALUES (?, ?, ?, ?, ?, ?)",
+                         (order_id, row["item_name"], row["qty"], row["price"], row["subtotal"], row["remarks"]))
         
-        # Update User Balance
         conn.execute("UPDATE Users SET balance = balance + ? WHERE email = ?", (total_due, st.session_state.user_email))
+        conn.execute("DELETE FROM DraftCarts WHERE user_email=?", (st.session_state.user_email,))
         conn.commit()
         
-        send_admin_email_alert(order_id, st.session_state.user_name, total_due, payment_method)
+        send_admin_email_alert(order_id, st.session_state.user_name, total_due, payment_method, df_cart)
         
         st.session_state.last_order = {"id": order_id, "total": total_due, "method": payment_method}
-        st.session_state.cart = {}
         st.rerun()
 
 def page_confirmation():
@@ -348,7 +400,6 @@ def page_confirmation():
     st.markdown(f"### Invoice Summary\n* **Order ID:** {order['id']}\n* **Total Amount Due:** €{order['total']:.2f}\n* **Payment Method:** {order['method']}")
     if st.button("Return to Catalog"):
         del st.session_state.last_order
-        st.session_state.nav_selection = "Catalog"
         st.rerun()
 
 # --- PAGE: MY PAST ORDERS (CUSTOMER VIEW) ---
@@ -365,14 +416,14 @@ def page_customer_orders():
     for _, order in df_orders.iterrows():
         status_icon = "🟢" if order['status'] == "Settled" else "🔴"
         with st.expander(f"📦 Order {order['order_id']} | {order['date']} | €{order['total_amount']:.2f} {status_icon}"):
-            items = pd.read_sql("SELECT item_name, qty, unit_price, subtotal FROM OrderLineItems WHERE order_id=?", conn, params=(order['order_id'],))
+            items = pd.read_sql("SELECT item_name, qty, unit_price, subtotal, remarks FROM OrderLineItems WHERE order_id=?", conn, params=(order['order_id'],))
             st.dataframe(items, hide_index=True, use_container_width=True)
 
 # --- PAGE: ADMIN DASHBOARD ---
 def page_admin():
     st.title("🛡️ Admin Dashboard")
     
-    tab1, tab2, tab3 = st.tabs(["Friend Dossiers", "All Orders", "Catalog Manager"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Friend Dossiers", "All Orders", "Analytics", "System"])
     
     with tab1:
         st.subheader("Open Tabs & User Balances")
@@ -392,20 +443,82 @@ def page_admin():
     with tab2:
         st.subheader("Order History")
         df_orders = pd.read_sql("SELECT order_id, date, user_email, total_amount, status FROM Orders ORDER BY date DESC", conn)
-        st.dataframe(df_orders, hide_index=True, use_container_width=True)
         
+        for _, order in df_orders.iterrows():
+            with st.expander(f"📦 {order['order_id']} | {order['user_email']} | €{order['total_amount']:.2f} ({order['status']})"):
+                items = pd.read_sql("SELECT item_name, qty, unit_price, subtotal, remarks FROM OrderLineItems WHERE order_id=?", conn, params=(order['order_id'],))
+                st.dataframe(items, hide_index=True, use_container_width=True)
+                
+                if st.button("🗑️ Delete Test Order (Reverses Balance)", key=f"del_{order['order_id']}"):
+                    if order['status'] != 'Settled':
+                        conn.execute("UPDATE Users SET balance = balance - ? WHERE email = ?", (order['total_amount'], order['user_email']))
+                    conn.execute("DELETE FROM OrderLineItems WHERE order_id=?", (order['order_id'],))
+                    conn.execute("DELETE FROM Orders WHERE order_id=?", (order['order_id'],))
+                    conn.commit()
+                    st.rerun()
+                    
     with tab3:
+        st.subheader("Retail Sales Analytics")
+        query = """
+            SELECT o.date, c.category, o.user_email, l.qty, l.subtotal 
+            FROM Orders o 
+            JOIN OrderLineItems l ON o.order_id = l.order_id
+            JOIN Catalog c ON l.item_name = c.item_name
+        """
+        try:
+            df_analytics = pd.read_sql(query, conn)
+            if not df_analytics.empty:
+                df_analytics["Date"] = pd.to_datetime(df_analytics["date"]).dt.date
+                
+                c_fig1, c_fig2 = st.columns(2)
+                with c_fig1:
+                    fig1 = px.pie(df_analytics, values="subtotal", names="category", title="Revenue by Category", hole=0.4)
+                    st.plotly_chart(fig1, use_container_width=True)
+                with c_fig2:
+                    fig2 = px.pie(df_analytics, values="subtotal", names="user_email", title="Revenue by Customer", hole=0.4)
+                    st.plotly_chart(fig2, use_container_width=True)
+                
+                st.write("**Daily Sales Trend**")
+                daily_sales = df_analytics.groupby("Date")["subtotal"].sum().reset_index()
+                fig3 = px.bar(daily_sales, x="Date", y="subtotal", title="Total Retail Sales (€) Over Time")
+                st.plotly_chart(fig3, use_container_width=True)
+            else:
+                st.info("Not enough order data to display analytics yet.")
+        except Exception as e:
+            st.error(f"Analytics error: {e}")
+
+    with tab4:
         st.subheader("Manage Catalog")
         df_cat = pd.read_sql("SELECT * FROM Catalog", conn)
         edited_cat = st.data_editor(df_cat, num_rows="dynamic", use_container_width=True, hide_index=True)
         if st.button("Save Catalog Changes"):
             edited_cat.to_sql("Catalog", conn, if_exists="replace", index=False)
             st.success("Catalog updated!")
+            
+        st.divider()
+        st.write("### 💾 System Database Backup & Restore")
+        c_down, c_up = st.columns(2)
+        with c_down:
+            if os.path.exists(DB_PATH):
+                with open(DB_PATH, "rb") as f:
+                    st.download_button(label="⬇️ Backup Data (.db)", data=f, file_name="retail_orders.db", mime="application/octet-stream", use_container_width=True)
+        with c_up:
+            uploaded_db = st.file_uploader("Restore Data", type=["db"], label_visibility="collapsed")
+            if uploaded_db is not None:
+                if st.button("⬆️ Restore System Now", type="primary", use_container_width=True):
+                    with open(DB_PATH, "wb") as f:
+                        f.write(uploaded_db.getbuffer())
+                    st.success("Database restored successfully! The app will now reload.")
+                    st.rerun()
 
 # --- MAIN ROUTING ---
 if not st.session_state.logged_in:
     page_login()
 else:
+    # Set default navigation if it doesn't exist
+    if 'active_tab' not in st.session_state:
+        st.session_state.active_tab = "Catalog"
+
     # Sidebar Profile & Navigation Setup
     if st.session_state.user_role == "Customer":
         nav_options = ["Catalog", "Cart / Checkout", "My Past Orders"]
@@ -420,7 +533,7 @@ else:
             st.write(f"💼 Open Tab: **€{user_balance:.2f}**")
         else:
             st.write("🛡️ **Admin Account**")
-            automated_db_backup()
+            automated_db_backup() # Silently fires backup if 48hrs passed
             
         st.divider()
         
