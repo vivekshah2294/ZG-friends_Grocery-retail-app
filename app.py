@@ -204,7 +204,7 @@ def send_admin_email_alert(order_id, user_name, total_amount, method, df_cart):
         print(f"Email failed: {e}")
 
 def automated_db_backup(db_path=DB_PATH, backup_interval_hours=48):
-    """Silently emails the retail_orders.db file to the admin if 48 hours have passed."""
+    """Silently emails the retail_orders.db file to пре admin if 48 hours have passed."""
     try:
         tracker_file = "last_retail_backup.txt"
         current_time = time.time()
