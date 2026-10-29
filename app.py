@@ -5,29 +5,40 @@ import hashlib
 import uuid
 from datetime import datetime
 import smtplib
-from email.mime.text import MIMEText
-import os
 import time
+import os
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders
+from datetime import date
+from email.mime.text import MIMEText
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Zin & Gin Retail", layout="wide", initial_sidebar_state="collapsed")
 
-# --- CSS STYLING ---
+# --- MOBILE UI OPTIMIZATION CSS ---
 st.markdown("""
     <style>
     .block-container { padding-top: 1rem; padding-bottom: 2rem; }
+    
     div[data-testid="stButton"] button {
-        height: 3rem; font-weight: bold; border-radius: 8px; width: 100%;
+        height: 2.8rem; font-weight: bold; border-radius: 6px; width: 100%;
     }
+    
+    /* Aggressive Mobile Flexbox to stop horizontal scroll */
     @media (max-width: 576px) {
         [data-testid="stHorizontalBlock"] {
-            flex-direction: row !important; flex-wrap: nowrap !important; align-items: center !important; gap: 0.25rem !important;
+            flex-direction: row !important; flex-wrap: nowrap !important; align-items: center !important; gap: 0.2rem !important;
         }
         [data-testid="column"] {
             width: auto !important; flex: 1 1 0% !important; min-width: 0 !important; padding: 0 !important;
+        }
+        /* Force text to wrap instead of pushing screen wider */
+        div[data-testid="stMarkdownContainer"] p {
+            white-space: normal !important;
+            font-size: 0.85rem !important;
+            line-height: 1.2 !important;
+            margin-bottom: 0 !important;
         }
     }
     </style>
@@ -38,7 +49,6 @@ st.markdown("""
 def get_db_connection():
     conn = sqlite3.connect("retail_orders.db", check_same_thread=False)
     
-    # Create Tables
     conn.execute("""
         CREATE TABLE IF NOT EXISTS Users (
             email TEXT PRIMARY KEY,
@@ -80,20 +90,55 @@ def get_db_connection():
         )
     """)
     
-    # Seed Admin User if not exists
     admin_email = "zinandgin@gmail.com"
     admin_pass = hashlib.sha256("admin123".encode()).hexdigest()
     conn.execute("INSERT OR IGNORE INTO Users (email, name, password_hash, role) VALUES (?, ?, ?, ?)", 
                  (admin_email, "Admin", admin_pass, "Admin"))
     
-    # Seed Catalog if empty
     if pd.read_sql("SELECT COUNT(*) FROM Catalog", conn).iloc[0,0] == 0:
-        dummy_catalog = [
-            ("Dals & Legumes", "Toor Dal (KRG / Kamal)", "1 kg", 4.19, 3.30),
-            ("Whole Spices", "Jeera Whole (KRG)", "400 g", 5.19, 4.20),
-            ("Flours & Grains", "Aashirwaad Atta", "10 kg", 16.49, 15.65)
+        full_catalog = [
+            ("Flours & Grains", "Aashirwaad Atta", "10 kg", 15.79, 14.50),
+            ("Flours & Grains", "Basmati Rice (Premium / India Gate)", "5 kg", 17.49, 15.25),
+            ("Flours & Grains", "Sona Masoori Rice", "5 kg", 10.99, 9.20),
+            ("Flours & Grains", "Idli Rice", "5 kg", 9.99, 8.50),
+            ("Flours & Grains", "Besan (Gram Flour)", "1 kg", 3.19, 2.60),
+            ("Flours & Grains", "Sooji (Rava / Semolina)", "1 kg", 2.69, 2.25),
+            ("Dals & Legumes", "Toor Dal", "1 kg", 4.19, 3.45),
+            ("Dals & Legumes", "Moong Dal Yellow", "1 kg", 3.99, 3.30),
+            ("Dals & Legumes", "Moong Whole Green", "1 kg", 3.69, 3.05),
+            ("Dals & Legumes", "Urid Dal Whole", "1 kg", 4.29, 3.55),
+            ("Dals & Legumes", "Urid Dal Split / Chilka", "1 kg", 3.99, 3.35),
+            ("Dals & Legumes", "Chana Dal", "1 kg", 3.49, 2.85),
+            ("Dals & Legumes", "Chickpeas (Kabuli Chana)", "1 kg", 3.59, 2.95),
+            ("Dals & Legumes", "Kaala Chana (Black Chickpeas)", "1 kg", 3.29, 2.70),
+            ("Dals & Legumes", "Yellow Peas Ragda (Vatana)", "1 kg", 2.89, 2.35),
+            ("Whole Spices", "Jeera Whole (Cumin Seeds)", "400 g", 5.19, 4.25),
+            ("Whole Spices", "Mustard Seeds (Rai)", "400 g", 3.49, 2.85),
+            ("Whole Spices", "Black Pepper Whole", "100 g", 2.99, 2.35),
+            ("Whole Spices", "Cardamom Green (Elaichi)", "50 g", 6.79, 5.20),
+            ("Whole Spices", "Cloves (Laung)", "50 g", 2.59, 2.00),
+            ("Whole Spices", "Ajwain (Carom Seeds)", "100 g", 1.99, 1.55),
+            ("Whole Spices", "Hing (Asafoetida - Vandevi/LG)", "50 g", 2.49, 1.90),
+            ("Whole Spices", "Saffron (Kesar)", "1 g", 7.49, 5.75),
+            ("Spice Powders", "Turmeric Powder (Haldi)", "400 g", 3.29, 2.60),
+            ("Spice Powders", "Red Chilli Powder (Extra Hot / Kashmiri)", "400 g", 4.89, 3.80),
+            ("Spice Powders", "Coriander Powder (Dhaniya)", "400 g", 3.49, 2.70),
+            ("Spice Powders", "Jeera Powder (Cumin Powder)", "400 g", 4.99, 3.90),
+            ("Blended Masalas", "Garam Masala (MDH/Everest)", "100 g", 2.69, 2.10),
+            ("Blended Masalas", "Pav Bhaji Masala (MDH/Everest)", "100 g", 2.69, 2.10),
+            ("Blended Masalas", "Biryani Masala (Shan/MDH)", "100 g", 2.79, 2.20),
+            ("Blended Masalas", "Chhole Masala (MDH/Everest)", "100 g", 2.69, 2.10),
+            ("Blended Masalas", "Chaat Masala (MDH Chunky Chat)", "100 g", 2.49, 1.90),
+            ("Fresh & Perishables", "Fresh Green Chilli", "500 g", 4.99, 4.75),
+            ("Fresh & Perishables", "Fresh Curry Leaves", "50 g", 1.89, 1.55),
+            ("Fresh & Perishables", "Fresh Idli/Dosa Batter", "1 kg", 5.19, 4.45),
+            ("Fresh & Perishables", "Paneer Block", "1 kg", 13.38, 11.50),
+            ("Pantry & Specialty", "Ghee (GRB / Khanum / TRS / Amul)", "1 L / 1 kg", 22.89, 20.50),
+            ("Pantry & Specialty", "Cashew Nuts Broken (Kaju Tukda)", "500 g", 8.49, 6.90),
+            ("Pantry & Specialty", "Sev (Nylon / Ratlami)", "400 g", 3.79, 2.95),
+            ("Pantry & Specialty", "Chai Patti (Wagh Bakri / Red Label)", "1 kg", 13.49, 10.95)
         ]
-        conn.executemany("INSERT INTO Catalog (category, item_name, pack_size, jamoona_price, friends_price) VALUES (?, ?, ?, ?, ?)", dummy_catalog)
+        conn.executemany("INSERT INTO Catalog (category, item_name, pack_size, jamoona_price, friends_price) VALUES (?, ?, ?, ?, ?)", full_catalog)
     
     conn.commit()
     return conn
@@ -113,15 +158,18 @@ def update_cart(item, price, delta):
     else:
         st.session_state.cart[item] = {"qty": new_qty, "price": price}
 
-def send_admin_email_alert(order_id, user_name, total_amount, method):
-    # Requires st.secrets to be configured with an app password
+def send_admin_email_alert(order_id, user_name, total_amount, method, cart_items):
     try:
         if "email" in st.secrets:
             sender = st.secrets["email"]["sender"]
             pwd = st.secrets["email"]["password"]
-            receiver = "zinandgin@gmail.com"
+            receiver = "zinandgin@gmail.com"  # Hardcoded routing to admin email
             
-            body = f"New order placed by {user_name}!\n\nOrder ID: {order_id}\nTotal: €{total_amount:.2f}\nMethod: {method}\n\nLog into the Admin portal to view details."
+            items_str = ""
+            for item in cart_items:
+                items_str += f"- {item['qty']}x {item['item_name']} (€{item['subtotal']:.2f})\n"
+                
+            body = f"New order placed by {user_name}!\n\nOrder ID: {order_id}\nTotal: €{total_amount:.2f}\nMethod: {method}\n\nItemized List:\n{items_str}\n\nLog into the Admin portal to view ledger details."
             msg = MIMEText(body)
             msg["Subject"] = f"🛒 New Retail Order: €{total_amount:.2f}"
             msg["From"] = f"Zin & Gin Retail <{sender}>"
@@ -131,7 +179,7 @@ def send_admin_email_alert(order_id, user_name, total_amount, method):
                 server.login(sender, pwd)
                 server.send_message(msg)
     except Exception as e:
-        print(f"Email failed: {e}")
+        print(f"Email skipped: {e}")
 
 def automated_db_backup(db_path="retail_orders.db", backup_interval_hours=48):
     """Silently emails the retail_orders.db file to the admin if 48 hours have passed."""
@@ -150,15 +198,15 @@ def automated_db_backup(db_path="retail_orders.db", backup_interval_hours=48):
         if "email" in st.secrets and os.path.exists(db_path):
             sender = st.secrets["email"]["sender"]
             pwd = st.secrets["email"]["password"]
-            receiver = "zinandgin@gmail.com"
+            receiver = "zinandgin@gmail.com" # Admin email destination
             
             msg = MIMEMultipart()
-            msg["Subject"] = f"Zin & Gin Retail DB Backup - {datetime.today().strftime('%Y-%m-%d')}"
+            msg["Subject"] = f"Zin & Gin Retail DB Backup - {date.today()}"
             msg["From"] = f"Zin & Gin Retail <{sender}>"
             msg["To"] = receiver
             
             body = MIMEText("Attached is your automated Zin & Gin Retail database backup. Keep this safe to restore your friends' balances and order history if the cloud server restarts.")
-            msg.attach(MIMEText(body, 'plain'))
+            msg.attach(body)
             
             with open(db_path, "rb") as attachment:
                 part = MIMEBase("application", "octet-stream")
@@ -176,7 +224,7 @@ def automated_db_backup(db_path="retail_orders.db", backup_interval_hours=48):
                 f.write(str(current_time))
                 
     except Exception:
-        pass 
+        pass # Fail silently to prevent disrupting the app interface
 
 # --- SESSION STATE INITIALIZATION ---
 if 'logged_in' not in st.session_state:
@@ -186,8 +234,6 @@ if 'logged_in' not in st.session_state:
     st.session_state.user_role = ""
 if 'cart' not in st.session_state:
     st.session_state.cart = {}
-if 'nav_selection' not in st.session_state:
-    st.session_state.nav_selection = "Catalog"
 
 # --- PAGE: LOGIN / SIGNUP ---
 def page_login():
@@ -208,7 +254,6 @@ def page_login():
                     st.session_state.user_email = user.iloc[0]['email']
                     st.session_state.user_name = user.iloc[0]['name']
                     st.session_state.user_role = user.iloc[0]['role']
-                    st.session_state.nav_selection = "Catalog" if user.iloc[0]['role'] == "Customer" else "Admin Dashboard"
                     st.rerun()
                 else:
                     st.error("Invalid credentials.")
@@ -233,65 +278,42 @@ def page_login():
 # --- PAGE: CUSTOMER ORDERING CATALOG ---
 def page_order():
     st.title(f"👋 Hi, {st.session_state.user_name}!")
-    st.write("Browse the catalog and tap to add items to your cart.")
+    st.write("Browse the catalog below. **Tap on any item name to add it to your order.**")
     
     df_catalog = pd.read_sql("SELECT * FROM Catalog", conn)
-    
     if df_catalog.empty:
         st.warning("Catalog is empty.")
         return
 
     for category in df_catalog['category'].unique():
-        with st.expander(f"🛒 {category}", expanded=True):
+        with st.expander(f"🛒 {category}", expanded=False):
             cat_items = df_catalog[df_catalog['category'] == category]
-            
-            c_name, c_jamoona, c_price, c_actions = st.columns([4, 2, 2, 3])
-            c_name.markdown("**Item**")
-            c_jamoona.markdown("**Jamoona**")
-            c_price.markdown("**Our Price**")
-            st.divider()
             
             for _, row in cat_items.iterrows():
                 item_name = str(row['item_name'])
                 pack = str(row['pack_size'])
                 jamoona = row['jamoona_price']
                 price = row['friends_price']
+                item_id = row['id']
                 
                 current_qty = st.session_state.cart.get(item_name, {}).get("qty", 0)
                 
-                c1, c2, c3, c4 = st.columns([4, 2, 2, 3])
-                
-                display_name = f"{item_name} ({pack})"
+                # 1. The "Tap-to-Add" Button Logic
+                # We build a single button string that includes the item, price, and active quantity
+                btn_label = f"{item_name} ({pack}) | €{price:.2f}"
                 if current_qty > 0:
-                     display_name += f"   🟢 **{current_qty}**"
-                c1.write(display_name)
-                c2.markdown(f"<span style='color:red; text-decoration:line-through;'>€{jamoona:.2f}</span>", unsafe_allow_html=True)
-                c3.markdown(f"**€{price:.2f}**")
+                     btn_label += f"   🟢 {current_qty}"
                 
-                ac1, ac2 = c4.columns(2)
-                with ac1:
-                    st.button("➖", key=f"sub_{item_name}", on_click=update_cart, args=(item_name, price, -1))
-                with ac2:
-                    st.button("➕", key=f"add_{item_name}", on_click=update_cart, args=(item_name, price, 1))
+                # 2. Asymmetric 2-Column Layout (No empty space)
+                # The main item button gets 85% of the width, the minus button gets 15%
+                c_main, c_sub = st.columns([6, 1])
                 
-                st.markdown("<hr style='margin: 0.5rem 0; opacity: 0.2;'>", unsafe_allow_html=True)
-
-   # --- DYNAMIC REVIEW CART BUTTON ---
-    if st.session_state.cart:
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.divider()
-        
-        cart_qty = sum(item["qty"] for item in st.session_state.cart.values())
-        cart_total = sum(item["qty"] * item["price"] for item in st.session_state.cart.values())
-        
-        def navigate_to_cart():
-            st.session_state.active_tab = "Cart / Checkout"
-            
-        c_tot, c_btn = st.columns([1, 1])
-        with c_tot:
-            st.markdown(f"### 🛒 {cart_qty} items | €{cart_total:.2f}")
-        with c_btn:
-            st.button("Review Cart & Checkout ➡️", type="primary", use_container_width=True, on_click=navigate_to_cart)
+                with c_main:
+                    # Clicking the large item button directly adds +1
+                    st.button(btn_label, key=f"add_{item_id}", on_click=update_cart, args=(item_name, price, 1), use_container_width=True)
+                with c_sub:
+                    # Compact minus button for corrections
+                    st.button("➖", key=f"sub_{item_id}", on_click=update_cart, args=(item_name, price, -1), use_container_width=True)
 
 # --- PAGE: CUSTOMER CART & CHECKOUT ---
 def page_cart():
@@ -299,9 +321,6 @@ def page_cart():
     
     if not st.session_state.cart:
         st.info("Your cart is empty.")
-        if st.button("⬅️ Back to Catalog"):
-            st.session_state.nav_selection = "Catalog"
-            st.rerun()
         return
         
     cart_items = []
@@ -323,20 +342,17 @@ def page_cart():
         order_id = str(uuid.uuid4())[:8].upper()
         order_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
-        # Write Order
         conn.execute("INSERT INTO Orders (order_id, date, user_email, total_amount, payment_method, status) VALUES (?, ?, ?, ?, ?, ?)",
                      (order_id, order_date, st.session_state.user_email, total_due, payment_method, "Open"))
         
-        # Write Line Items
         for item in cart_items:
             conn.execute("INSERT INTO OrderLineItems (order_id, item_name, qty, unit_price, subtotal) VALUES (?, ?, ?, ?, ?)",
                          (order_id, item["item_name"], item["qty"], item["unit_price"], item["subtotal"]))
         
-        # Update User Balance
         conn.execute("UPDATE Users SET balance = balance + ? WHERE email = ?", (total_due, st.session_state.user_email))
         conn.commit()
         
-        send_admin_email_alert(order_id, st.session_state.user_name, total_due, payment_method)
+        send_admin_email_alert(order_id, st.session_state.user_name, total_due, payment_method, cart_items)
         
         st.session_state.last_order = {"id": order_id, "total": total_due, "method": payment_method}
         st.session_state.cart = {}
@@ -348,7 +364,6 @@ def page_confirmation():
     st.markdown(f"### Invoice Summary\n* **Order ID:** {order['id']}\n* **Total Amount Due:** €{order['total']:.2f}\n* **Payment Method:** {order['method']}")
     if st.button("Return to Catalog"):
         del st.session_state.last_order
-        st.session_state.nav_selection = "Catalog"
         st.rerun()
 
 # --- PAGE: MY PAST ORDERS (CUSTOMER VIEW) ---
@@ -392,7 +407,18 @@ def page_admin():
     with tab2:
         st.subheader("Order History")
         df_orders = pd.read_sql("SELECT order_id, date, user_email, total_amount, status FROM Orders ORDER BY date DESC", conn)
-        st.dataframe(df_orders, hide_index=True, use_container_width=True)
+        
+        if df_orders.empty:
+            st.info("No orders found.")
+        else:
+            for _, order in df_orders.iterrows():
+                status_icon = "🟢" if order['status'] == "Settled" else "🔴 Open"
+                
+                # Creates an expandable row for every order to view the itemized breakdown
+                with st.expander(f"📦 Order {order['order_id']} | {order['user_email']} | €{order['total_amount']:.2f} | {status_icon}"):
+                    st.write(f"**Date:** {order['date']}")
+                    items = pd.read_sql("SELECT item_name, qty, unit_price, subtotal FROM OrderLineItems WHERE order_id=?", conn, params=(order['order_id'],))
+                    st.dataframe(items, hide_index=True, use_container_width=True)
         
     with tab3:
         st.subheader("Manage Catalog")
@@ -406,44 +432,36 @@ def page_admin():
 if not st.session_state.logged_in:
     page_login()
 else:
-    # Sidebar Profile & Navigation Setup
-    if st.session_state.user_role == "Customer":
-        nav_options = ["Catalog", "Cart / Checkout", "My Past Orders"]
-    else:
-        nav_options = ["Admin Dashboard", "Catalog", "Cart / Checkout"]
-
     with st.sidebar:
         st.write(f"👤 **{st.session_state.user_name}**")
         
         if st.session_state.user_role == "Customer":
             user_balance = pd.read_sql("SELECT balance FROM Users WHERE email=?", conn, params=(st.session_state.user_email,)).iloc[0,0]
             st.write(f"💼 Open Tab: **€{user_balance:.2f}**")
+            st.divider()
+            nav = st.radio("Navigation", ["Catalog", "Cart / Checkout", "My Past Orders"])
         else:
             st.write("🛡️ **Admin Account**")
+            st.divider()
+            
+            # Fire the silent backup check whenever the Admin logs in
             automated_db_backup()
             
-        st.divider()
-        
-        # Bind the radio button directly to the session state key used in the callback
-        st.radio("Navigation", nav_options, key="active_tab")
+            nav = st.radio("Navigation", ["Admin Dashboard", "Catalog", "Cart / Checkout"])
 
         if st.button("Log Out"):
             st.session_state.logged_in = False
             st.session_state.cart = {}
-            if 'last_order' in st.session_state:
-                del st.session_state.last_order
             st.rerun()
 
-    # View Router dynamically tracks the radio button's key
-    active_nav = st.session_state.active_tab
-
+    # View Router
     if 'last_order' in st.session_state:
         page_confirmation()
-    elif active_nav == "Catalog":
+    elif nav == "Catalog":
         page_order()
-    elif active_nav == "Cart / Checkout":
+    elif nav == "Cart / Checkout":
         page_cart()
-    elif active_nav == "My Past Orders":
+    elif nav == "My Past Orders":
         page_customer_orders()
-    elif active_nav == "Admin Dashboard":
+    elif nav == "Admin Dashboard":
         page_admin()
