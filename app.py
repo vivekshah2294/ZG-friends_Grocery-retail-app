@@ -81,7 +81,8 @@ def get_db_connection():
             item_name TEXT,
             qty INTEGER,
             price REAL,
-            remarks TEXT DEFAULT ''
+            remarks TEXT DEFAULT '',
+            PRIMARY KEY (user_email, item_name)
         )
     """)
     conn.execute("""
@@ -154,15 +155,14 @@ def update_draft_cart(email, item_name, price, delta, remark=""):
     current_remark = row[1] if row else remark
     new_qty = max(0, current_qty + delta)
     
-    if new_qty == 0:
+    if new_qty == 0 and not current_remark:
         cur.execute("DELETE FROM DraftCarts WHERE user_email=? AND item_name=?", (email, item_name))
     else:
-        # Safe update-then-insert pattern (immune to constraint errors)
-        cur.execute("UPDATE DraftCarts SET qty=?, price=?, remarks=? WHERE user_email=? AND item_name=?", 
-                    (new_qty, price, current_remark, email, item_name))
-        if cur.rowcount == 0:
-            cur.execute("INSERT INTO DraftCarts (user_email, item_name, qty, price, remarks) VALUES (?, ?, ?, ?, ?)", 
-                        (email, item_name, new_qty, price, current_remark))
+        # Bulletproof replacement using INSERT OR REPLACE
+        cur.execute("""
+            INSERT OR REPLACE INTO DraftCarts (user_email, item_name, qty, price, remarks) 
+            VALUES (?, ?, ?, ?, ?)
+        """, (email, item_name, new_qty, price, current_remark))
     
     conn.commit()
 
@@ -171,11 +171,15 @@ def save_draft_remark(email, item_name, price, remark):
     cur.execute("SELECT qty FROM DraftCarts WHERE user_email=? AND item_name=?", (email, item_name))
     row = cur.fetchone()
     
-    if row:
-        cur.execute("UPDATE DraftCarts SET remarks=? WHERE user_email=? AND item_name=?", (remark, email, item_name))
+    current_qty = row[0] if row else 0
+    
+    if current_qty == 0 and not remark:
+        cur.execute("DELETE FROM DraftCarts WHERE user_email=? AND item_name=?", (email, item_name))
     else:
-        cur.execute("INSERT INTO DraftCarts (user_email, item_name, qty, price, remarks) VALUES (?, ?, ?, ?, ?)", 
-                    (email, item_name, 0, price, remark))
+        cur.execute("""
+            INSERT OR REPLACE INTO DraftCarts (user_email, item_name, qty, price, remarks) 
+            VALUES (?, ?, ?, ?, ?)
+        """, (email, item_name, current_qty, price, remark))
     conn.commit()
 
 def generate_keep_note(order_id, user_name, date_str, line_items):
