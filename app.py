@@ -405,15 +405,15 @@ def page_admin():
 if not st.session_state.logged_in:
     page_login()
 else:
+    # Set default navigation if it doesn't exist
+    if 'current_page' not in st.session_state:
+        st.session_state.current_page = "Catalog"
+
     # Sidebar Profile & Navigation Setup
     if st.session_state.user_role == "Customer":
         nav_options = ["Catalog", "Cart / Checkout", "My Past Orders"]
     else:
         nav_options = ["Admin Dashboard", "Catalog", "Cart / Checkout"]
-
-    # Security fallback in case state gets out of sync
-    if st.session_state.nav_selection not in nav_options:
-        st.session_state.nav_selection = nav_options[0]
 
     with st.sidebar:
         st.write(f"👤 **{st.session_state.user_name}**")
@@ -427,8 +427,18 @@ else:
             
         st.divider()
         
-        # Link radio button strictly to session state for programmatic navigation
-        st.radio("Navigation", nav_options, key="nav_selection")
+        # Draw the radio button, but set its index based on the session state
+        try:
+            default_idx = nav_options.index(st.session_state.current_page)
+        except ValueError:
+            default_idx = 0
+            
+        selected_nav = st.radio("Navigation", nav_options, index=default_idx)
+        
+        # Update the session state based on sidebar clicks
+        if selected_nav != st.session_state.current_page:
+            st.session_state.current_page = selected_nav
+            st.rerun()
 
         if st.button("Log Out"):
             st.session_state.logged_in = False
@@ -437,8 +447,8 @@ else:
                 del st.session_state.last_order
             st.rerun()
 
-    # View Router uses the session state variable driven by both Sidebar OR Page Buttons
-    active_nav = st.session_state.nav_selection
+    # View Router uses the session state variable
+    active_nav = st.session_state.current_page
 
     if 'last_order' in st.session_state:
         page_confirmation()
