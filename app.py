@@ -118,12 +118,30 @@ def get_db_connection():
         )
     """)
     
-    # Ensure 'remarks' column exists if the table was already created previously
-    try:
-        conn.execute("ALTER TABLE OrderLineItems ADD COLUMN remarks TEXT DEFAULT ''")
+    conn.commit()
+    
+    # Safe Admin Seeding (Checking if table exists and user exists separately)
+    admin_email = "zinandgin@gmail.com"
+    admin_pass = hashlib.sha256("admin123".encode()).hexdigest()
+    
+    cur = conn.cursor()
+    cur.execute("SELECT email FROM Users WHERE email = ?", (admin_email,))
+    if not cur.fetchone():
+        conn.execute("INSERT INTO Users (email, name, password_hash, role) VALUES (?, ?, ?, ?)", 
+                     (admin_email, "Admin", admin_pass, "Admin"))
         conn.commit()
-    except sqlite3.OperationalError:
-        pass # Column already exists
+    
+    # Seed Catalog if empty
+    if pd.read_sql("SELECT COUNT(*) FROM Catalog", conn).iloc[0,0] == 0:
+        dummy_catalog = [
+            ("Dals & Legumes", "Toor Dal (KRG / Kamal)", "1 kg", 4.19, 3.30),
+            ("Whole Spices", "Jeera Whole (KRG)", "400 g", 5.19, 4.20),
+            ("Flours & Grains", "Aashirwaad Atta", "10 kg", 16.49, 15.65)
+        ]
+        conn.executemany("INSERT INTO Catalog (category, item_name, pack_size, jamoona_price, friends_price) VALUES (?, ?, ?, ?, ?)", dummy_catalog)
+        conn.commit()
+        
+    return conn
     
     # Seed Admin User if not exists
     admin_email = "zinandgin@gmail.com"
