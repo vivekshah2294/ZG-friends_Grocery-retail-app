@@ -118,6 +118,13 @@ def get_db_connection():
         )
     """)
     
+    # Ensure 'remarks' column exists if the table was already created previously
+    try:
+        conn.execute("ALTER TABLE OrderLineItems ADD COLUMN remarks TEXT DEFAULT ''")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass # Column already exists
+    
     # Seed Admin User if not exists
     admin_email = "zinandgin@gmail.com"
     admin_pass = hashlib.sha256("admin123".encode()).hexdigest()
