@@ -276,7 +276,7 @@ def page_order():
                 
                 st.markdown("<hr style='margin: 0.5rem 0; opacity: 0.2;'>", unsafe_allow_html=True)
 
-    # --- DYNAMIC REVIEW CART BUTTON ---
+   # --- DYNAMIC REVIEW CART BUTTON ---
     if st.session_state.cart:
         st.markdown("<br>", unsafe_allow_html=True)
         st.divider()
@@ -284,13 +284,14 @@ def page_order():
         cart_qty = sum(item["qty"] for item in st.session_state.cart.values())
         cart_total = sum(item["qty"] * item["price"] for item in st.session_state.cart.values())
         
+        def navigate_to_cart():
+            st.session_state.active_tab = "Cart / Checkout"
+            
         c_tot, c_btn = st.columns([1, 1])
         with c_tot:
             st.markdown(f"### 🛒 {cart_qty} items | €{cart_total:.2f}")
         with c_btn:
-            if st.button("Review Cart & Checkout ➡️", type="primary", use_container_width=True):
-                st.session_state.nav_selection = "Cart / Checkout"
-                st.rerun()
+            st.button("Review Cart & Checkout ➡️", type="primary", use_container_width=True, on_click=navigate_to_cart)
 
 # --- PAGE: CUSTOMER CART & CHECKOUT ---
 def page_cart():
@@ -405,10 +406,6 @@ def page_admin():
 if not st.session_state.logged_in:
     page_login()
 else:
-    # Set default navigation if it doesn't exist
-    if 'current_page' not in st.session_state:
-        st.session_state.current_page = "Catalog"
-
     # Sidebar Profile & Navigation Setup
     if st.session_state.user_role == "Customer":
         nav_options = ["Catalog", "Cart / Checkout", "My Past Orders"]
@@ -423,22 +420,12 @@ else:
             st.write(f"💼 Open Tab: **€{user_balance:.2f}**")
         else:
             st.write("🛡️ **Admin Account**")
-            automated_db_backup() # Silently fires backup if 48hrs passed
+            automated_db_backup()
             
         st.divider()
         
-        # Draw the radio button, but set its index based on the session state
-        try:
-            default_idx = nav_options.index(st.session_state.current_page)
-        except ValueError:
-            default_idx = 0
-            
-        selected_nav = st.radio("Navigation", nav_options, index=default_idx)
-        
-        # Update the session state based on sidebar clicks
-        if selected_nav != st.session_state.current_page:
-            st.session_state.current_page = selected_nav
-            st.rerun()
+        # Bind the radio button directly to the session state key used in the callback
+        st.radio("Navigation", nav_options, key="active_tab")
 
         if st.button("Log Out"):
             st.session_state.logged_in = False
@@ -447,8 +434,8 @@ else:
                 del st.session_state.last_order
             st.rerun()
 
-    # View Router uses the session state variable
-    active_nav = st.session_state.current_page
+    # View Router dynamically tracks the radio button's key
+    active_nav = st.session_state.active_tab
 
     if 'last_order' in st.session_state:
         page_confirmation()
