@@ -157,11 +157,11 @@ def update_draft_cart(email, item_name, price, delta):
     if new_qty == 0:
         cur.execute("DELETE FROM DraftCarts WHERE user_email=? AND item_name=?", (email, item_name))
     else:
-        cur.execute("""
-            INSERT INTO DraftCarts (user_email, item_name, qty, price, remarks) 
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(user_email, item_name) DO UPDATE SET qty=excluded.qty
-        """, (email, item_name, new_qty, price, current_remark))
+        if row:
+            cur.execute("UPDATE DraftCarts SET qty=? WHERE user_email=? AND item_name=?", (new_qty, email, item_name))
+        else:
+            cur.execute("INSERT INTO DraftCarts (user_email, item_name, qty, price, remarks) VALUES (?, ?, ?, ?, ?)", 
+                        (email, item_name, new_qty, price, current_remark))
     
     conn.commit()
 
@@ -170,13 +170,12 @@ def update_draft_remark_from_state(email, item_name, price, state_key):
     cur = conn.cursor()
     cur.execute("SELECT qty FROM DraftCarts WHERE user_email=? AND item_name=?", (email, item_name))
     row = cur.fetchone()
-    qty = row[0] if row else 0
     
-    cur.execute("""
-        INSERT INTO DraftCarts (user_email, item_name, qty, price, remarks) 
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(user_email, item_name) DO UPDATE SET remarks=excluded.remarks
-    """, (email, item_name, qty, price, val))
+    if row:
+        cur.execute("UPDATE DraftCarts SET remarks=? WHERE user_email=? AND item_name=?", (val, email, item_name))
+    else:
+        cur.execute("INSERT INTO DraftCarts (user_email, item_name, qty, price, remarks) VALUES (?, ?, ?, ?, ?)", 
+                    (email, item_name, 0, price, val))
     conn.commit()
 
 def send_admin_email_alert(order_id, user_name, total_amount, method, df_cart):
@@ -204,7 +203,7 @@ def send_admin_email_alert(order_id, user_name, total_amount, method, df_cart):
         print(f"Email failed: {e}")
 
 def automated_db_backup(db_path=DB_PATH, backup_interval_hours=48):
-    """Silently emails the retail_orders.db file to пре admin if 48 hours have passed."""
+    """Silently emails the retail_orders.db file to the admin if 48 hours have passed."""
     try:
         tracker_file = "last_retail_backup.txt"
         current_time = time.time()
