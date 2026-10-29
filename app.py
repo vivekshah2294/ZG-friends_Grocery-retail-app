@@ -5,6 +5,12 @@ import hashlib
 import uuid
 from datetime import datetime
 import smtplib
+import time
+import os
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
+from datetime import date
 from email.mime.text import MIMEText
 
 # --- PAGE CONFIGURATION ---
@@ -174,6 +180,51 @@ def send_admin_email_alert(order_id, user_name, total_amount, method, cart_items
                 server.send_message(msg)
     except Exception as e:
         print(f"Email skipped: {e}")
+
+def automated_db_backup(db_path="retail_orders.db", backup_interval_hours=48):
+    """Silently emails the retail_orders.db file to the admin if 48 hours have passed."""
+    try:
+        tracker_file = "last_retail_backup.txt"
+        current_time = time.time()
+        
+        # Check if enough time has passed since the last backup
+        if os.path.exists(tracker_file):
+            with open(tracker_file, "r") as f:
+                last_backup = float(f.read().strip())
+            if (current_time - last_backup) < (backup_interval_hours * 3600):
+                return
+        
+        # Prepare and send the email with the database attached
+        if "email" in st.secrets and os.path.exists(db_path):
+            sender = st.secrets["email"]["sender"]
+            pwd = st.secrets["email"]["password"]
+            receiver = "zinandgin@gmail.com" # Admin email destination
+            
+            msg = MIMEMultipart()
+            msg["Subject"] = f"Zin & Gin Retail DB Backup - {date.today()}"
+            msg["From"] = f"Zin & Gin Retail <{sender}>"
+            msg["To"] = receiver
+            
+            body = MIMEText("Attached is your automated Zin & Gin Retail database backup. Keep this safe to restore your friends' balances and order history if the cloud server restarts.")
+            msg.attach(body)
+            
+            with open(db_path, "rb") as attachment:
+                part = MIMEBase("application", "octet-stream")
+                part.set_payload(attachment.read())
+            encoders.encode_base64(part)
+            part.add_header("Content-Disposition", f"attachment; filename={os.path.basename(db_path)}")
+            msg.attach(part)
+            
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+                server.login(sender, pwd)
+                server.send_message(msg)
+                
+            # Log the successful backup time
+            with open(tracker_file, "w") as f:
+                f.write(str(current_time))
+                
+    except Exception:
+        pass # Fail silently to prevent disrupting the app interface
 
 # --- SESSION STATE INITIALIZATION ---
 if 'logged_in' not in st.session_state:
@@ -392,6 +443,10 @@ else:
         else:
             st.write("🛡️ **Admin Account**")
             st.divider()
+            
+            # Fire the silent backup check whenever the Admin logs in
+            automated_db_backup()
+            
             nav = st.radio("Navigation", ["Admin Dashboard", "Catalog", "Cart / Checkout"])
 
         if st.button("Log Out"):
