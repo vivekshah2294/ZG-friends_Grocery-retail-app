@@ -90,6 +90,14 @@ def get_db_connection():
             keep_note TEXT DEFAULT ''
         )
     """)
+    
+    # Auto-add keep_note column if missing from older databases
+    try:
+        conn.execute("ALTER TABLE Orders ADD COLUMN keep_note TEXT DEFAULT ''")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass # Column already exists
+
     conn.execute("""
         CREATE TABLE IF NOT EXISTS OrderLineItems (
             line_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -102,6 +110,8 @@ def get_db_connection():
             FOREIGN KEY(order_id) REFERENCES Orders(order_id)
         )
     """)
+    conn.commit()
+    return conn
     
     # Ensure Admin Account exists
     admin_email = "zinandgin@gmail.com"
