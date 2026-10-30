@@ -14,13 +14,12 @@ import time
 
 # --- LOCAL DATABASE INITIALIZATION ---
 DB_PATH = "retail_orders.db"
-
 @st.cache_resource
+
+conn = get_db_connection()
 def get_db_connection():
     # ... database connection & table creation logic ...
     return conn
-
-conn = get_db_connection()
 
 # --- AUTOMATED BACKUP CHECK (Runs globally on any app wake-up / HTTP ping) ---
 automated_db_backup()
