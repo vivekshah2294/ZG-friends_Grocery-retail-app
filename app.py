@@ -12,19 +12,6 @@ from email import encoders
 import os
 import time
 
-# --- LOCAL DATABASE INITIALIZATION ---
-DB_PATH = "retail_orders.db"
-@st.cache_resource
-
-conn = get_db_connection()
-def get_db_connection():
-    # ... database connection & table creation logic ...
-    return conn
-
-# --- AUTOMATED BACKUP CHECK (Runs globally on any app wake-up / HTTP ping) ---
-automated_db_backup()
-
-
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Zin & Gin Retail", layout="wide", initial_sidebar_state="collapsed")
 
@@ -45,7 +32,6 @@ st.markdown("""
         [data-testid="column"] {
             width: auto !important; flex: 1 1 0% !important; min-width: 0 !important; padding: 0 !important;
         }
-        /* Force text to wrap instead of pushing screen wider */
         div[data-testid="stMarkdownContainer"] p {
             white-space: normal !important;
             font-size: 0.85rem !important;
@@ -156,6 +142,11 @@ def get_db_connection():
     
     conn.commit()
     return conn
+
+conn = get_db_connection()
+
+# --- AUTOMATED BACKUP CHECK (Runs globally on any app wake-up / HTTP ping) ---
+automated_db_backup()
 
 
 
