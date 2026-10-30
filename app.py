@@ -12,11 +12,19 @@ from email import encoders
 import os
 import time
 
-# --- DATABASE INITIALIZATION ---
+# --- LOCAL DATABASE INITIALIZATION ---
+DB_PATH = "retail_orders.db"
+
+@st.cache_resource
+def get_db_connection():
+    # ... database connection & table creation logic ...
+    return conn
+
 conn = get_db_connection()
 
-# --- AUTOMATED BACKUP CHECK (Runs on any app wake-up / HTTP ping) ---
+# --- AUTOMATED BACKUP CHECK (Runs globally on any app wake-up / HTTP ping) ---
 automated_db_backup()
+
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Zin & Gin Retail", layout="wide", initial_sidebar_state="collapsed")
@@ -443,7 +451,7 @@ else:
             nav = st.radio("Navigation", ["Catalog", "Cart / Checkout", "My Past Orders"])
         else:
             st.write("🛡️ **Admin Account**")
-            automated_db_backup() # Silently checks and sends 48h email backup on admin login
+            """ automated_db_backup() # Silently checks and sends 48h email backup on admin login """
             st.divider()
             nav = st.radio("Navigation", ["Admin Dashboard", "Catalog", "Cart / Checkout"])
 
