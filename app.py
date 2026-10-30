@@ -23,29 +23,26 @@ st.set_page_config(
 # --- TEAL THEME & MOBILE UI OPTIMIZATION CSS ---
 st.markdown("""
     <style>
-    /* Global Teal Theme Accents */
-    :root {
-        --primary-teal: #006d77;
-        --light-teal: #83c5be;
-        --pale-teal: #edf6f9;
-        --dark-slate: #2b2d42;
-    }
+    .block-container { padding-top: 1rem; padding-bottom: 2rem; padding-left: 0.5rem; padding-right: 0.5rem; }
     
-    .block-container { padding-top: 1rem; padding-bottom: 2rem; padding-left: 0.75rem; padding-right: 0.75rem; }
-    
-    /* Custom Button Styling */
+    /* Clean neutral buttons with subtle teal hover */
     div[data-testid="stButton"] button, div[data-testid="stPopover"] button {
         height: 3rem; font-weight: 600; border-radius: 8px; width: 100%; padding: 0.2rem;
-        background-color: #006d77; color: white; border: none;
+        background-color: #f0f3f4; color: #2b2d42; border: 1px solid #dcdde1;
     }
     div[data-testid="stButton"] button:hover {
-        background-color: #83c5be; color: #2b2d42;
+        background-color: #e8f1f2; border-color: #006d77; color: #006d77;
     }
     
-    /* Primary action buttons */
+    /* Primary action buttons keep the teal accent */
     button[kind="primary"] {
-        background-color: #e29578 !important; color: white !important;
+        background-color: #006d77 !important; color: white !important; border: none !important;
     }
+    button[kind="primary"]:hover {
+        background-color: #05828f !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
     /* Mobile Flexbox Layout */
     @media (max-width: 576px) {
