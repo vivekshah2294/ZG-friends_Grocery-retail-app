@@ -42,7 +42,7 @@ st.markdown("""
         background-color: #05828f !important;
     }
     </style>
-""", unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
 
     /* Mobile Flexbox Layout */
     @media (max-width: 576px) {
