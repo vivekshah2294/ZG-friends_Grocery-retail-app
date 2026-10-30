@@ -12,6 +12,12 @@ from email import encoders
 import os
 import time
 
+# --- DATABASE INITIALIZATION ---
+conn = get_db_connection()
+
+# --- AUTOMATED BACKUP CHECK (Runs on any app wake-up / HTTP ping) ---
+automated_db_backup()
+
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Zin & Gin Retail", layout="wide", initial_sidebar_state="collapsed")
 
@@ -144,7 +150,7 @@ def get_db_connection():
     conn.commit()
     return conn
 
-conn = get_db_connection()
+
 
 # --- HELPER FUNCTIONS ---
 def hash_password(password):
