@@ -41,8 +41,6 @@ st.markdown("""
     button[kind="primary"]:hover {
         background-color: #05828f !important;
     }
-    </style>
-    """, unsafe_allow_html=True)
 
     /* Mobile Flexbox Layout */
     @media (max-width: 576px) {
